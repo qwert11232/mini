@@ -24,7 +24,7 @@ Neon: users · courts · coaches · training_sessions · free_slots · bookings 
 | Production-домен (заглушка) | `https://mini-seven-xi.vercel.app` |
 | Neon | `ep-weathered-cell-b8fnxjpq-pooler.c-14.us-east-1.aws.neon.tech`, база `neondb` |
 | Бот | `@testtesttennisbot` |
-| Админ | `@nikita_tsk` |
+| Админ | `@nikita_tsk` · Telegram ID `793536041` |
 | Оплата | на ресепшене (`orders.status = reserved`), онлайн-платежей нет |
 
 Важно: Vercel собирает ветку **main**. Работа ведётся в `arena/20f16b78-mini`,
@@ -87,6 +87,7 @@ curl -s localhost:5173/api/catalog    # корты, тренеры, заняти
    | `VITE_APP_URL` | `https://<проект>.vercel.app` |
    | `VITE_ADMIN_BOT_URL` | ссылка на бота админа |
    | `PREVIEW_MODE` | `1` только для Preview, в Production `0` |
+   | `ADMIN_TELEGRAM_IDS` | `793536041` (опционально: ID зашит по умолчанию) |
 
 3. Frontend ходит на относительные `/api/*` — CORS не нужен.
 4. Заголовок `content-security-policy: frame-ancestors …telegram.org` уже разрешает
