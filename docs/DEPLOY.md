@@ -141,13 +141,28 @@ curl -s localhost:5173/api/catalog    # корты, тренеры, заняти
 1. В Vercel → Environment Variables добавить:
    `TELEGRAM_WEBHOOK_SECRET` (любая случайная строка), `SETUP_TOKEN` (тоже случайная),
    `ADMIN_TELEGRAM_IDS=793536041`, `VITE_APP_URL=https://mini-seven-xi.vercel.app`.
-2. Выполнить локально:
+2. Открыть в браузере (терминал не нужен):
 
-   ```bash
-   curl -X POST "https://mini-seven-xi.vercel.app/api/bot/setup?token=<SETUP_TOKEN>"
+   ```
+   https://mini-seven-xi.vercel.app/api/bot/setup?token=<SETUP_TOKEN>
    ```
 
-   Ответ `{"ok":true,...}` — webhook встал, команды меню установлены.
+   Ответ `{"ok":true,"steps":[...]}` — webhook встал, команды меню установлены.
+   Если `ok: false`, в поле `error` будет причина (нет токена, неверный SETUP_TOKEN,
+   Telegram недоступен) — эндпоинт специально не падает 500.
+
+   Крайний случай, если приложение недоступно: webhook можно поставить прямо в браузере
+   через Telegram API —
+   `https://api.telegram.org/bot<ТОКЕН>/setWebhook?url=https://<домен>/api/bot/webhook`.
+3. Диагностика одной ссылкой:
+
+   ```
+   https://mini-seven-xi.vercel.app/api/health?diag=1
+   ```
+
+   Показывает, какие переменные заданы (только факт, не значения), отвечает ли база
+   и видит ли функция Telegram API (`telegram.info.last_error_message` объясняет,
+   почему апдейты не доходят).
 3. Написать боту `/start` с аккаунта `@nikita_tsk`.
 
 **Что умеет:**
