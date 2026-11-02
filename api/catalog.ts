@@ -5,7 +5,7 @@ import { failure, getDb, json } from './_lib/db.js'
  * корты, тренеры, занятия на 7 дней, свободные окна, товары.
  * Кэш на 60 секунд: сетка меняется редко, но не должна залипать.
  */
-export default async function handler(): Promise<Response> {
+async function handler(): Promise<Response> {
   try {
     const sql = getDb()
 
@@ -44,3 +44,9 @@ export default async function handler(): Promise<Response> {
     return failure(error, 'catalog')
   }
 }
+
+/**
+ * Vercel (Node runtime) понимает Web-сигнатуру только через объект с методом `fetch`.
+ * «Голый» default-экспорт вызывается как handler(req, res) — Response терялся (500/504).
+ */
+export default { fetch: handler }

@@ -152,9 +152,15 @@ export async function cancelBooking(request: Request): Promise<Response> {
 }
 
 /** Роутер: Vercel вызывает один файл на все методы. */
-export default async function handler(request: Request): Promise<Response> {
+async function handler(request: Request): Promise<Response> {
   if (request.method === 'GET') return listBookings(request)
   if (request.method === 'POST') return createBooking(request)
   if (request.method === 'DELETE') return cancelBooking(request)
   return json({ error: 'Метод не поддерживается' }, 405)
 }
+
+/**
+ * Vercel (Node runtime) понимает Web-сигнатуру только через объект с методом `fetch`.
+ * «Голый» default-экспорт вызывается как handler(req, res) — Response терялся (500/504).
+ */
+export default { fetch: handler }
