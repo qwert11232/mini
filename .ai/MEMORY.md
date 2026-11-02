@@ -104,6 +104,7 @@
 - Решение: все 9 функций `api/**` → `export default { fetch: handler }`; `health` показывает флаг пароля
   и по `SETUP_TOKEN`, и по `ADMIN_SETUP_TOKEN`. В `smoke.mjs` добавлена регрессия: голый default-экспорт
   в `api/**` валит смоук.
+- Мерж: PR #10 → `d9f902e`, Vercel success.
 - Проверка: `tsc` оба конфига; теневой прогон `fetch`-экспортов с заглушкой Neon — `ping` 200,
   `setup` 200/`applied: 18`, без токена 401, `health?diag=1` 200; `build` и `smoke` зелёные.
 - Урок: в Node-рантайме Vercel не использовать голый default-экспорт; писать `{ fetch }`,
