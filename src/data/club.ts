@@ -4,7 +4,7 @@ import type {
   FreeSlot,
   Product,
   TrainingSession,
-} from '../lib/types'
+} from '../lib/types.ts'
 
 export const CLUB = {
   name: 'ДТ',

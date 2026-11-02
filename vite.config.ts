@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { previewApi } from './server/preview-api'
+import { previewApi } from './server/preview-api.ts'
 
 /**
  * Локальный режим: /api/* обслуживает in-memory/файловый эмулятор (server/preview-api.ts),
