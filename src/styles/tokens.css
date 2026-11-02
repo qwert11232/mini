@@ -1,0 +1,116 @@
+/* =============================================================================
+   ДТ · Токены дизайн-системы
+   Палитра «белая глина + теннисный зелёный». Всё остальное в приложении
+   берёт цвета, радиусы и тени только отсюда.
+   ========================================================================== */
+
+:root {
+  /* ── Зелёные: от глубокого корта до лайма на мяче ──────────────────────── */
+  --green-950: #052417;
+  --green-900: #08301f;
+  --green-800: #0b3b27;
+  --green-700: #10503a;
+  --green-600: #14683f;
+  --green-500: #1a8350;
+  --green-400: #34a06a;
+  --green-300: #74c79b;
+  --green-200: #b9e6cd;
+  --green-100: #e2f5e9;
+  --green-50: #f1faf5;
+
+  --lime-600: #7fb800;
+  --lime-500: #a5dc10;
+  --lime-400: #c2f02a;
+  --lime-300: #dcff6b;
+
+  /* ── Нейтральные: «белая глина» ────────────────────────────────────────── */
+  --clay-0: #ffffff;
+  --clay-25: #fcfdfb;
+  --clay-50: #f6f8f5;
+  --clay-100: #eef1ec;
+  --clay-200: #e1e6df;
+  --clay-300: #cdd4cb;
+  --clay-400: #a5afa3;
+  --clay-500: #79857a;
+  --clay-700: #3d4a40;
+  --clay-900: #16211a;
+
+  /* ── Семантика ─────────────────────────────────────────────────────────── */
+  --bg: var(--clay-50);
+  --bg-elevated: var(--clay-0);
+  --surface: rgba(255, 255, 255, 0.86);
+  --surface-solid: #ffffff;
+  --surface-glass: rgba(252, 253, 251, 0.74);
+  --text: var(--clay-900);
+  --text-secondary: var(--clay-500);
+  --text-tertiary: var(--clay-400);
+  --separator: rgba(22, 33, 26, 0.08);
+  --separator-strong: rgba(22, 33, 26, 0.14);
+  --accent: var(--green-600);
+  --accent-press: var(--green-700);
+  --accent-soft: var(--green-100);
+  --on-accent: #ffffff;
+  --highlight: var(--lime-500);
+  --danger: #b9392f;
+  --warning: #b26b06;
+
+  /* ── Радиусы в духе iOS: непрерывные скругления ───────────────────────── */
+  --r-xs: 8px;
+  --r-sm: 12px;
+  --r-md: 16px;
+  --r-lg: 22px;
+  --r-xl: 28px;
+  --r-2xl: 34px;
+  --r-pill: 999px;
+
+  /* ── Тени: мягкие, без «грязи» ─────────────────────────────────────────── */
+  --shadow-xs: 0 1px 2px rgba(11, 59, 39, 0.06);
+  --shadow-sm: 0 2px 10px rgba(11, 59, 39, 0.07);
+  --shadow-md: 0 10px 26px -12px rgba(11, 59, 39, 0.24);
+  --shadow-lg: 0 24px 48px -20px rgba(11, 59, 39, 0.32);
+  --shadow-sheet: 0 -18px 50px -18px rgba(5, 36, 23, 0.35);
+
+  /* ── Типографика: системный стек SF → SF-подобные ──────────────────────── */
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Segoe UI',
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
+
+  --fs-caption: 11px;
+  --fs-footnote: 12.5px;
+  --fs-subhead: 14px;
+  --fs-body: 15.5px;
+  --fs-headline: 17px;
+  --fs-title3: 20px;
+  --fs-title2: 24px;
+  --fs-title1: 31px;
+  --fs-large: 38px;
+
+  /* ── Ритм и тайминги ───────────────────────────────────────────────────── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --sp-8: 40px;
+
+  --gutter: 18px;
+  --tabbar-h: 62px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-soft: cubic-bezier(0.25, 1, 0.5, 1);
+  --dur-fast: 160ms;
+  --dur: 280ms;
+  --dur-slow: 460ms;
+
+  /* ── Текстуры ──────────────────────────────────────────────────────────── */
+  /* Разметка корта: тонкие белые линии под углом 45° */
+  --texture-court-lines: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96' viewBox='0 0 96 96'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='0.16' stroke-width='1.25'%3E%3Cpath d='M-24 24 L120 168'/%3E%3Cpath d='M-24 72 L120 216'/%3E%3Cpath d='M-24 -24 L120 120'/%3E%3C/g%3E%3C/svg%3E");
+  /* Грунт: мелкое зерно, чтобы белый не был «пластиковым» */
+  --texture-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.055'/%3E%3C/svg%3E");
+  /* Пушок мяча: плотный диагональный штрих */
+  --texture-felt: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Cpath d='M0 8 L8 0' stroke='%23ffffff' stroke-opacity='0.18' stroke-width='1'/%3E%3C/svg%3E");
+}
