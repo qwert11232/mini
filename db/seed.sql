@@ -75,3 +75,14 @@ on conflict (id) do update set
   title = excluded.title, subtitle = excluded.subtitle, category = excluded.category,
   price = excluded.price, old_price = excluded.old_price, image = excluded.image,
   badge = excluded.badge, colors = excluded.colors, sort_order = excluded.sort_order;
+
+-- Реальные даты: сегодня + day_offset, время из start_time. Идемпотентно.
+update training_sessions
+set starts_at = date_trunc('day', now()) + make_interval(days => day_offset)
+                + (start_time || ':00')::interval
+where starts_at is null or starts_at::date <> (now()::date + day_offset);
+
+update free_slots
+set starts_at = date_trunc('day', now()) + make_interval(days => day_offset)
+                + (start_time || ':00')::interval
+where starts_at is null or starts_at::date <> (now()::date + day_offset);

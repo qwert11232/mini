@@ -25,6 +25,7 @@ export async function listBookings(request: Request): Promise<Response> {
       select b.id, b.kind, b.source_id as "sourceId", b.title, b.subtitle,
              b.day_offset as "dayOffset", b.start_time as start,
              b.duration_min as "durationMin", b.price,
+             to_char(b.starts_at at time zone 'Europe/Moscow', 'YYYY-MM-DD HH24:MI') as "startsAt",
              extract(epoch from b.created_at) * 1000 as "createdAt"
       from bookings b
       join users u on u.id = b.user_id
@@ -57,6 +58,15 @@ export async function createBooking(request: Request): Promise<Response> {
     const price = readNumber(body.price, 'price', 0, 200000)
 
     const sql = getDb()
+
+    const [slotRow] = await sql`
+      select to_char(coalesce(
+               (select starts_at from training_sessions where id = ${sourceId}),
+               (select starts_at from free_slots where id = ${sourceId})
+             ) at time zone 'Europe/Moscow', 'YYYY-MM-DD HH24:MI') as "startsAt"
+    `
+    const startsAt = (slotRow as { startsAt: string | null } | undefined)?.startsAt
+    if (!startsAt) throw new HttpError(404, 'Занятие или окно не найдены')
 
     const [userRow] = await sql`
       insert into users (telegram_id, first_name, last_name, username)
@@ -95,8 +105,9 @@ export async function createBooking(request: Request): Promise<Response> {
     }
 
     const [booking] = await sql`
-      insert into bookings (user_id, kind, source_id, title, subtitle, day_offset, start_time, duration_min, price)
-      values (${userId}, ${kind}, ${sourceId}, ${title}, ${subtitle}, ${dayOffset}, ${start}, ${durationMin}, ${price})
+      insert into bookings (user_id, kind, source_id, title, subtitle, day_offset, start_time, duration_min, price, starts_at)
+      values (${userId}, ${kind}, ${sourceId}, ${title}, ${subtitle}, ${dayOffset}, ${start}, ${durationMin}, ${price},
+              ${startsAt}::timestamp at time zone 'Europe/Moscow')
       returning id
     `
 
