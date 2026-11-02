@@ -8,7 +8,7 @@ import { getWebhookInfo } from './bot/_lib/telegram.js'
  * и доступ к Telegram API. Нужна, когда в браузере видно только 500 без причины.
  * Секреты наружу не отдаются — только факт их наличия и длина.
  */
-export default async function handler(request: Request): Promise<Response> {
+async function handler(request: Request): Promise<Response> {
   const diag = new URL(request.url).searchParams.has('diag')
 
   try {
@@ -29,7 +29,7 @@ export default async function handler(request: Request): Promise<Response> {
       DATABASE_URL: Boolean(process.env.DATABASE_URL),
       TELEGRAM_BOT_TOKEN: Boolean(process.env.TELEGRAM_BOT_TOKEN),
       TELEGRAM_WEBHOOK_SECRET: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET),
-      SETUP_TOKEN: Boolean(process.env.SETUP_TOKEN),
+      SETUP_TOKEN: Boolean(process.env.SETUP_TOKEN ?? process.env.ADMIN_SETUP_TOKEN),
       ADMIN_TELEGRAM_IDS: (process.env.ADMIN_TELEGRAM_IDS ?? '793536041').split(',').length,
       VITE_APP_URL: process.env.VITE_APP_URL ?? '(не задан, берётся origin запроса)',
     }
@@ -58,7 +58,7 @@ export default async function handler(request: Request): Promise<Response> {
             DATABASE_URL: Boolean(process.env.DATABASE_URL),
             TELEGRAM_BOT_TOKEN: Boolean(process.env.TELEGRAM_BOT_TOKEN),
             TELEGRAM_WEBHOOK_SECRET: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET),
-            SETUP_TOKEN: Boolean(process.env.SETUP_TOKEN),
+            SETUP_TOKEN: Boolean(process.env.SETUP_TOKEN ?? process.env.ADMIN_SETUP_TOKEN),
             VITE_APP_URL: process.env.VITE_APP_URL ?? '(не задан)',
           },
           hint: 'Проверь DATABASE_URL: строка должна быть pooled и содержать sslmode=require',
@@ -69,3 +69,9 @@ export default async function handler(request: Request): Promise<Response> {
     return failure(error, 'health')
   }
 }
+
+/**
+ * Vercel (Node runtime) понимает Web-сигнатуру только через объект с методом `fetch`.
+ * «Голый» default-экспорт вызывается как handler(req, res) — Response терялся (500/504).
+ */
+export default { fetch: handler }

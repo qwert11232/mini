@@ -30,7 +30,7 @@ const HELP = [
   'Записаться на занятие и арендовать корт можно в приложении.',
 ].join('\n')
 
-export default async function handler(request: Request): Promise<Response> {
+async function handler(request: Request): Promise<Response> {
   if (request.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Метод не поддерживается' }), {
       status: 405,
@@ -295,3 +295,9 @@ async function markIssued(orderId: string, adminTelegramId: number): Promise<Res
 function appUrl(): string {
   return process.env.VITE_APP_URL ?? 'https://mini-seven-xi.vercel.app'
 }
+
+/**
+ * Vercel (Node runtime) понимает Web-сигнатуру только через объект с методом `fetch`.
+ * «Голый» default-экспорт вызывается как handler(req, res) — Response терялся (500/504).
+ */
+export default { fetch: handler }

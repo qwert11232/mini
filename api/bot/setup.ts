@@ -23,7 +23,7 @@ const COMMANDS = [
 
 type Step = { step: string; ok: boolean; detail?: unknown }
 
-export default async function handler(request: Request): Promise<Response> {
+async function handler(request: Request): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'POST') {
     return json({ error: 'Метод не поддерживается' }, 405)
   }
@@ -134,3 +134,9 @@ function json(data: unknown, status = 200): Response {
     headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
   })
 }
+
+/**
+ * Vercel (Node runtime) понимает Web-сигнатуру только через объект с методом `fetch`.
+ * «Голый» default-экспорт вызывается как handler(req, res) — Response терялся (500/504).
+ */
+export default { fetch: handler }

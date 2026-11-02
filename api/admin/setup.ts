@@ -173,7 +173,7 @@ const SEED = [
      where starts_at is null or starts_at::date <> (now()::date + day_offset)`,
 ]
 
-export default async function handler(request: Request): Promise<Response> {
+async function handler(request: Request): Promise<Response> {
   try {
     if (!process.env.DATABASE_URL) {
       return json(
@@ -230,3 +230,9 @@ export default async function handler(request: Request): Promise<Response> {
     )
   }
 }
+
+/**
+ * Vercel (Node runtime) понимает Web-сигнатуру только через объект с методом `fetch`.
+ * «Голый» default-экспорт вызывается как handler(req, res) — Response терялся (500/504).
+ */
+export default { fetch: handler }

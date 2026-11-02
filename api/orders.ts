@@ -68,8 +68,14 @@ export async function createOrder(request: Request): Promise<Response> {
   }
 }
 
-export default async function handler(request: Request): Promise<Response> {
+async function handler(request: Request): Promise<Response> {
   if (request.method === 'GET') return listOrders(request)
   if (request.method === 'POST') return createOrder(request)
   return json({ error: 'Метод не поддерживается' }, 405)
 }
+
+/**
+ * Vercel (Node runtime) понимает Web-сигнатуру только через объект с методом `fetch`.
+ * «Голый» default-экспорт вызывается как handler(req, res) — Response терялся (500/504).
+ */
+export default { fetch: handler }

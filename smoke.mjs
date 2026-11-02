@@ -80,3 +80,16 @@ const checks = {
 for (const [name, ok] of Object.entries(checks)) console.log(ok ? '✓' : '✗', name)
 if (errors.length) console.log(errors.slice(0, 3))
 process.exitCode = Object.values(checks).every(Boolean) ? 0 : 1
+
+// Регрессия #500/#504: у функций Vercel обязана быть Web-сигнатура `{ fetch }`.
+const apiDir = path.join('api')
+const apiFiles = fs
+  .readdirSync(apiDir, { recursive: true })
+  .filter((f) => String(f).endsWith('.ts') && !String(f).includes('_lib') && !String(f).includes('tsconfig'))
+for (const file of apiFiles) {
+  const source = fs.readFileSync(path.join(apiDir, String(file)), 'utf8')
+  if (/export default async function/.test(source)) {
+    throw new Error(`api/${file}: голый default-экспорт ломает вызов на Vercel, нужен export default { fetch: handler }`)
+  }
+}
+console.log(`✓ функции api: ${apiFiles.length} шт., Web-сигнатура на месте`)

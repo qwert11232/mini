@@ -6,7 +6,7 @@ import { isAdmin, verifyInitData } from './_lib/telegram.js'
  * Регистрирует/обновляет пользователя и отдаёт его профиль.
  * Используется как health-check: если 200 — связка Vercel + Neon + бот жива.
  */
-export default async function handler(request: Request): Promise<Response> {
+async function handler(request: Request): Promise<Response> {
   try {
     const auth = request.headers.get('authorization')
     if (!auth?.startsWith('tma ')) throw new HttpError(401, 'Требуется вход через Telegram')
@@ -45,3 +45,9 @@ export default async function handler(request: Request): Promise<Response> {
     return failure(error, 'me')
   }
 }
+
+/**
+ * Vercel (Node runtime) понимает Web-сигнатуру только через объект с методом `fetch`.
+ * «Голый» default-экспорт вызывается как handler(req, res) — Response терялся (500/504).
+ */
+export default { fetch: handler }
