@@ -1,5 +1,5 @@
-import { HttpError, failure, getDb, json } from './_lib/db.ts'
-import { isAdmin, verifyInitData } from './_lib/telegram.ts'
+import { HttpError, failure, getDb, json } from './_lib/db.js'
+import { isAdmin, verifyInitData } from './_lib/telegram.js'
 
 /**
  * GET /api/me — проверка подписи Telegram при открытии мини-аппа.

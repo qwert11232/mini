@@ -1,4 +1,4 @@
-import { failure, getDb, json } from './_lib/db.ts'
+import { failure, getDb, json } from './_lib/db.js'
 
 /**
  * GET /api/catalog — всё, что нужно приложению при старте:

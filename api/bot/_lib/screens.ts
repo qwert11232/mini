@@ -1,5 +1,5 @@
-import { getDb, money } from './db.ts'
-import type { Keyboard } from './telegram.ts'
+import { getDb, money } from './db.js'
+import type { Keyboard } from './telegram.js'
 
 export type Screen = { text: string; keyboard: Keyboard }
 

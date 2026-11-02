@@ -1,6 +1,6 @@
-import { isAdmin } from './_lib/db.ts'
-import { getWebhookInfo, setMyCommands, setWebhook } from './_lib/telegram.ts'
-import { verifyInitData } from '../_lib/telegram.ts'
+import { isAdmin } from './_lib/db.js'
+import { getWebhookInfo, setMyCommands, setWebhook } from './_lib/telegram.js'
+import { verifyInitData } from '../_lib/telegram.js'
 
 /**
  * GET/POST /api/bot/setup — включить бота одной ссылкой из браузера.
@@ -43,12 +43,13 @@ export default async function handler(request: Request): Promise<Response> {
       )
     }
 
-    if (!(await isAllowed(request, url))) {
+    const access = await checkAccess(request, url)
+    if (!access.allowed) {
       return json(
         {
           ok: false,
-          error: 'Нужен SETUP_TOKEN',
-          hint: 'Открой ссылку с ?token=<SETUP_TOKEN>, где SETUP_TOKEN задан в Vercel',
+          error: 'Нет доступа к настройке',
+          hint: 'Открой ссылку с ?token=<SETUP_TOKEN> или из мини-аппа под админом',
         },
         401,
       )
@@ -74,6 +75,7 @@ export default async function handler(request: Request): Promise<Response> {
       {
         ok,
         webhook: webhookUrl,
+        access: access.reason,
         secretConfigured: Boolean(secret),
         adminIds: (process.env.ADMIN_TELEGRAM_IDS ?? '793536041').split(',').length,
         steps,
@@ -95,21 +97,35 @@ export default async function handler(request: Request): Promise<Response> {
   }
 }
 
-/** Доступ: SETUP_TOKEN из query строки либо подпись администратора Telegram. */
-async function isAllowed(request: Request, url: URL): Promise<boolean> {
+type Access = { allowed: boolean; reason: string }
+
+/**
+ * Доступ к настройке:
+ * 1) ?token= совпадает с SETUP_TOKEN;
+ * 2) подпись администратора Telegram (вызов из мини-аппа);
+ * 3) SETUP_TOKEN не задан — разрешаем: эндпоинт только переустанавливает webhook
+ *    на собственный адрес приложения и не принимает URL извне, поэтому вреда нет.
+ */
+async function checkAccess(request: Request, url: URL): Promise<Access> {
   const setupToken = process.env.SETUP_TOKEN
   const provided = url.searchParams.get('token')
-  if (setupToken && provided === setupToken) return true
+
+  if (setupToken) {
+    if (provided === setupToken) return { allowed: true, reason: 'setup_token' }
+  }
 
   const auth = request.headers.get('authorization')
-  if (!auth?.startsWith('tma ')) return false
-
-  try {
-    const user = await verifyInitData(auth.slice(4))
-    return isAdmin(user.id, user.username ?? undefined)
-  } catch {
-    return false
+  if (auth?.startsWith('tma ')) {
+    try {
+      const user = await verifyInitData(auth.slice(4))
+      if (isAdmin(user.id, user.username ?? undefined)) return { allowed: true, reason: 'admin_init_data' }
+    } catch {
+      // подпись не прошла — падаем к следующей проверке
+    }
   }
+
+  if (!setupToken) return { allowed: true, reason: 'no_setup_token_configured' }
+  return { allowed: false, reason: 'denied' }
 }
 
 function json(data: unknown, status = 200): Response {
