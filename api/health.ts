@@ -1,4 +1,4 @@
-import { failure, getDb, json } from './_lib/db'
+import { failure, getDb, json } from './_lib/db.ts'
 
 /**
  * GET /api/health — быстрый чек связки: Vercel-функция жива, Neon отвечает,

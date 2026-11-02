@@ -107,7 +107,7 @@ export function CustomTrainingSheet({ coaches: COACHES, open, onClose, onBook }:
 
         <section className="stack gap-2">
           <p className="t-caption">День</p>
-          <div className="scroller" style={{ marginInline: 0, paddingInline: 0 }}>
+          <div className="scroller scroller--flat">
             {DAYS.map((offset) => (
               <button
                 key={offset}

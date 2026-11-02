@@ -52,7 +52,7 @@ export function ScheduleScreen({ bookings, catalog, onOpenSession, onCreateCusto
       <DayStrip days={DAYS} active={day} onSelect={(value) => { haptic('select'); setDay(value) }} />
 
       <div className="pad" style={{ marginTop: 14 }}>
-        <div className="scroller">
+        <div className="scroller scroller--flat">
           {GROUP_FILTERS.map((item) => (
             <button
               key={item}

@@ -1,4 +1,4 @@
-import { HttpError } from './db'
+import { HttpError } from './db.ts'
 
 export type TelegramUser = {
   id: number

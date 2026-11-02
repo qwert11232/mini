@@ -1,5 +1,5 @@
-import { HttpError, failure, getDb, json, readNumber, readString } from './_lib/db'
-import { resolveUser } from './_lib/telegram'
+import { HttpError, failure, getDb, json, readNumber, readString } from './_lib/db.ts'
+import { resolveUser } from './_lib/telegram.ts'
 
 /** GET /api/orders — заказы текущего пользователя. */
 export async function listOrders(request: Request): Promise<Response> {

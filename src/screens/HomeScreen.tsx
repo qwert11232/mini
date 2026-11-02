@@ -160,7 +160,7 @@ export function HomeScreen({ bookings, catalog, onNavigate, onOpenSession }: Pro
             <h2 className="t-title3">Тренеры</h2>
             <span className="t-footnote">Средний рейтинг {averageRating(COACHES)}</span>
           </div>
-          <div className="scroller coach-strip">
+          <div className="scroller scroller--bleed coach-strip">
             {COACHES.map((coach) => (
               <article key={coach.id} className="coach-card card">
                 <div className="coach-face" aria-hidden>{coach.initials}</div>
