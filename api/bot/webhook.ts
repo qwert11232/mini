@@ -1,5 +1,5 @@
-import { audit, getDb, isAdmin } from './_lib/db.ts'
-import { answerCallback, editMessage, sendMessage, type Update } from './_lib/telegram.ts'
+import { audit, getDb, isAdmin } from './_lib/db.js'
+import { answerCallback, editMessage, sendMessage, type Update } from './_lib/telegram.js'
 import {
   dayScreen,
   menuScreen,
@@ -7,7 +7,7 @@ import {
   sessionsScreen,
   usersScreen,
   type Screen,
-} from './_lib/screens.ts'
+} from './_lib/screens.js'
 
 /**
  * POST /api/bot/webhook — единственная точка входа бота.
@@ -88,7 +88,7 @@ async function handleMessage(update: Update): Promise<void> {
 
   if (command === '/me') {
     const sql = getDb()
-    const rows = await sql`
+    const rows = (await sql`
       select b.title, b.status,
              to_char(b.starts_at at time zone 'Europe/Moscow', 'DD.MM в HH24:MI') as start
       from bookings b
@@ -96,16 +96,14 @@ async function handleMessage(update: Update): Promise<void> {
       where u.telegram_id = ${message.from.id} and b.status = 'active'
       order by b.starts_at
       limit 5
-    `
+    `) as unknown as { title: string; start: string }[]
     if (rows.length === 0) {
       await sendMessage(chatId, 'Активных записей нет. Возьмите корт или запишитесь на занятие в приложении.', {
         inline_keyboard: [[{ text: '🎾 Открыть приложение', url: appUrl() }]],
       })
       return
     }
-    const lines = (rows as unknown as { title: string; start: string }[]).map(
-      (row) => `• ${row.start} — ${row.title}`,
-    )
+    const lines = rows.map((row) => `• ${row.start} — ${row.title}`)
     await sendMessage(chatId, [`<b>Ваши записи</b>`, '', ...lines].join('\n'))
     return
   }
@@ -186,7 +184,7 @@ async function handleCallback(update: Update): Promise<void> {
 
     case 'cancel': {
       const result = await cancelBooking(arg ?? '', query.from.id)
-      await answerCallback(query.id, result.ok ? 'Запись отменена' : result.message)
+      await answerCallback(query.id, result.ok ? 'Запись отменена' : 'Не удалось отменить')
       await render(chatId, await dayScreen(0), messageId)
       return
     }
@@ -195,14 +193,14 @@ async function handleCallback(update: Update): Promise<void> {
     case 'seatplus': {
       const delta = action === 'seatplus' ? 1 : -1
       const result = await shiftSeats(arg ?? '', delta, query.from.id)
-      await answerCallback(query.id, result.ok ? 'Места обновлены' : result.message)
+      await answerCallback(query.id, result.ok ? 'Места обновлены' : 'Не удалось изменить места')
       await render(chatId, await sessionsScreen(0), messageId)
       return
     }
 
     case 'issued': {
       const result = await markIssued(arg ?? '', query.from.id)
-      await answerCallback(query.id, result.ok ? 'Заказ выдан' : result.message)
+      await answerCallback(query.id, result.ok ? 'Заказ выдан' : 'Заказ уже выдан')
       await render(chatId, await ordersScreen(), messageId)
       return
     }

@@ -1,5 +1,5 @@
-import { failure, getDb, json } from './_lib/db.ts'
-import { getWebhookInfo } from './bot/_lib/telegram.ts'
+import { failure, getDb, json } from './_lib/db.js'
+import { getWebhookInfo } from './bot/_lib/telegram.js'
 
 /**
  * GET /api/health — чек связки Vercel → Neon → бот.
@@ -16,7 +16,13 @@ export default async function handler(request: Request): Promise<Response> {
     const [row] = await sql`select now() as "dbTime", current_database() as "database"`
     const db = row as { database: string; dbTime: string }
 
-    const base = { ok: true, db: db.database, dbTime: db.dbTime, bot: Boolean(process.env.TELEGRAM_BOT_TOKEN) }
+    const base = {
+      ok: true,
+      build: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local',
+      db: db.database,
+      dbTime: db.dbTime,
+      bot: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+    }
     if (!diag) return json(base)
 
     const env = {
