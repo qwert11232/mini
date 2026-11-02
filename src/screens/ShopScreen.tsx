@@ -40,7 +40,7 @@ export function ShopScreen({ favorites, products: allProducts, orderCount, onTog
       />
 
       <div className="pad">
-        <div className="scroller">
+        <div className="scroller scroller--flat">
           {CATEGORIES.map((item) => (
             <button
               key={item}

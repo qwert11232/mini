@@ -438,9 +438,13 @@ ol {
   overflow-x: auto;
   scrollbar-width: none;
   scroll-snap-type: x proximity;
+  padding-block: 2px;
+}
+
+/* Лента от края до края: контент начинается по сетке, но прокрутка идёт во всю ширину. */
+.scroller--bleed {
   padding-inline: var(--gutter);
   margin-inline: calc(-1 * var(--gutter));
-  padding-block: 2px;
 }
 
 .scroller::-webkit-scrollbar {

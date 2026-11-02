@@ -419,6 +419,7 @@
 /* ── Тренеры ──────────────────────────────────────────────────────────────── */
 
 .coach-strip {
+  padding-inline: var(--gutter);
   margin-inline: calc(-1 * var(--gutter));
 }
 
@@ -1495,4 +1496,11 @@
   .app-shell {
     box-shadow: 0 0 0 1px rgba(22, 33, 26, 0.06), 0 40px 80px -60px rgba(5, 36, 23, 0.6);
   }
+}
+
+/* ── Плоская лента: внутри контейнера с отступами, без выездов за край ─────── */
+
+.scroller--flat {
+  padding-inline: 0;
+  margin-inline: 0;
 }
