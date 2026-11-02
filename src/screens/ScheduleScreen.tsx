@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { COACHES, COURTS, GROUPS, SESSIONS } from '../data/club'
+import { GROUPS } from '../data/club'
+import type { Catalog } from '../lib/api'
 import type { Booking } from '../lib/types'
 import { ScreenHeader } from '../components/Chrome'
 import { DayStrip } from '../components/DayStrip'
@@ -12,11 +13,13 @@ const GROUP_FILTERS = ['Все', ...GROUPS] as const
 
 type Props = {
   bookings: Booking[]
+  catalog: Catalog
   onOpenSession: (id: string) => void
   onCreateCustom: () => void
 }
 
-export function ScheduleScreen({ bookings, onOpenSession, onCreateCustom }: Props) {
+export function ScheduleScreen({ bookings, catalog, onOpenSession, onCreateCustom }: Props) {
+  const { coaches: COACHES, courts: COURTS, sessions: SESSIONS } = catalog
   const [day, setDay] = useState(0)
   const [group, setGroup] = useState<(typeof GROUP_FILTERS)[number]>('Все')
 
@@ -25,7 +28,7 @@ export function ScheduleScreen({ bookings, onOpenSession, onCreateCustom }: Prop
       SESSIONS.filter((session) => session.dayOffset === day)
         .filter((session) => group === 'Все' || session.group === group)
         .sort((a, b) => a.start.localeCompare(b.start)),
-    [day, group],
+    [SESSIONS, day, group],
   )
 
   const totalSeats = SESSIONS.filter((session) => session.dayOffset === day).reduce(

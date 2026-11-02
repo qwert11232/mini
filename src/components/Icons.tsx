@@ -182,6 +182,15 @@ export function IconPlus(props: IconProps) {
   )
 }
 
+export function IconCloud(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M7.4 18.2a4.1 4.1 0 0 1-.5-8.2 5.3 5.3 0 0 1 10.2-1.4 3.9 3.9 0 0 1 .9 7.7" />
+      <path d="M12 11.6v7.1M9.3 16.2 12 18.9l2.7-2.7" />
+    </svg>
+  )
+}
+
 export function IconTelegram(props: IconProps) {
   return (
     <svg {...base(props)}>

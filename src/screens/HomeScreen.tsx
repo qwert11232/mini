@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { CLUB, COACHES, COURTS, FREE_SLOTS, SESSIONS } from '../data/club'
+import { CLUB } from '../data/club'
+import type { Catalog } from '../lib/api'
 import type { Booking, SectionId } from '../lib/types'
 import { dayName, endTime, formatDuration, minutesUntil } from '../lib/date'
 import { formatPrice, seatsLabel } from '../lib/format'
@@ -8,11 +9,13 @@ import { userInitials, userName } from '../lib/telegram'
 
 type Props = {
   bookings: Booking[]
+  catalog: Catalog
   onNavigate: (id: SectionId) => void
   onOpenSession: (id: string) => void
 }
 
-export function HomeScreen({ bookings, onNavigate, onOpenSession }: Props) {
+export function HomeScreen({ bookings, catalog, onNavigate, onOpenSession }: Props) {
+  const { coaches: COACHES, courts: COURTS, sessions: SESSIONS, slots: FREE_SLOTS } = catalog
   const upcoming = useMemo(
     () =>
       [...bookings]
@@ -26,7 +29,7 @@ export function HomeScreen({ bookings, onNavigate, onOpenSession }: Props) {
     return candidates.sort(
       (a, b) => a.dayOffset * 1440 + toMinutes(a.start) - (b.dayOffset * 1440 + toMinutes(b.start)),
     )[0]
-  }, [])
+  }, [SESSIONS])
 
   const freeCourts = useMemo(() => {
     const soon = FREE_SLOTS.filter((slot) => {
@@ -34,7 +37,7 @@ export function HomeScreen({ bookings, onNavigate, onOpenSession }: Props) {
       return diff > 0 && diff < 240
     })
     return COURTS.filter((court) => soon.some((slot) => slot.courtId === court.id)).length
-  }, [])
+  }, [COURTS, FREE_SLOTS])
 
   const greeting = userName()
 
@@ -155,7 +158,7 @@ export function HomeScreen({ bookings, onNavigate, onOpenSession }: Props) {
         <section className="stack gap-3">
           <div className="row-between">
             <h2 className="t-title3">Тренеры</h2>
-            <span className="t-footnote">Средний рейтинг 4.8</span>
+            <span className="t-footnote">Средний рейтинг {averageRating(COACHES)}</span>
           </div>
           <div className="scroller coach-strip">
             {COACHES.map((coach) => (
@@ -218,6 +221,12 @@ export function HomeScreen({ bookings, onNavigate, onOpenSession }: Props) {
       </div>
     </div>
   )
+}
+
+function averageRating(coaches: Catalog['coaches']): string {
+  if (coaches.length === 0) return '—'
+  const sum = coaches.reduce((acc, coach) => acc + coach.rating, 0)
+  return (sum / coaches.length).toFixed(1)
 }
 
 function toMinutes(time: string): number {

@@ -1,66 +1,187 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ApiError, api } from './api'
+import { COACHES, COURTS, FREE_SLOTS, PRODUCTS, SESSIONS } from '../data/club'
 import type { Booking, Order } from './types'
 
-const BOOKINGS_KEY = 'dt.bookings.v1'
-const ORDERS_KEY = 'dt.orders.v1'
-const FAVORITES_KEY = 'dt.favorites.v1'
+const MODE_KEY = 'dt.mode.v1'
 
-function read<T>(key: string, fallback: T): T {
+/** 'api' — живой бэкенд Vercel+Neon; 'demo' — локальные данные (нет сети/бэкенда ТГ). */
+export type Mode = 'api' | 'demo'
+
+export type Store = {
+  mode: Mode
+  loading: boolean
+  bookings: Booking[]
+  orders: Order[]
+  favorites: string[]
+  book: (draft: Omit<Booking, 'id' | 'createdAt'>) => Promise<{ ok: boolean; error?: string }>
+  cancelBooking: (id: string) => Promise<void>
+  order: (productId: string, quantity: number) => Promise<{ ok: boolean; error?: string }>
+  toggleFavorite: (productId: string) => void
+  retry: () => void
+}
+
+function readMode(): Mode {
+  try {
+    return localStorage.getItem(MODE_KEY) === 'api' ? 'api' : 'demo'
+  } catch {
+    return 'demo'
+  }
+}
+
+function readLocal<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key)
-    if (!raw) return fallback
-    return JSON.parse(raw) as T
+    return raw ? (JSON.parse(raw) as T) : fallback
   } catch {
     return fallback
   }
 }
 
-function write(key: string, value: unknown): void {
+function writeLocal(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value))
   } catch {
-    // Хранилище недоступно (приватный режим) — работаем без сохранения.
+    // Приватный режим: продолжаем без сохранения.
   }
 }
 
-function makeId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
-}
-
-export type Store = {
-  bookings: Booking[]
-  orders: Order[]
-  favorites: string[]
-  book: (booking: Omit<Booking, 'id' | 'createdAt'>) => Booking
-  cancelBooking: (id: string) => void
-  order: (item: Omit<Order, 'id' | 'createdAt'>) => Order
-  toggleFavorite: (productId: string) => void
-}
-
 export function useStore(): Store {
-  const [bookings, setBookings] = useState<Booking[]>(() => read(BOOKINGS_KEY, []))
-  const [orders, setOrders] = useState<Order[]>(() => read(ORDERS_KEY, []))
-  const [favorites, setFavorites] = useState<string[]>(() => read(FAVORITES_KEY, []))
+  const [mode, setMode] = useState<Mode>(readMode)
+  const [loading, setLoading] = useState(mode === 'api')
+  const [bookings, setBookings] = useState<Booking[]>(() => readLocal('dt.bookings.v1', []))
+  const [orders, setOrders] = useState<Order[]>(() => readLocal('dt.orders.v1', []))
+  const [favorites, setFavorites] = useState<string[]>(() => readLocal('dt.favorites.v1', []))
+  const [attempt, setAttempt] = useState(0)
+  const mounted = useRef(true)
 
-  useEffect(() => write(BOOKINGS_KEY, bookings), [bookings])
-  useEffect(() => write(ORDERS_KEY, orders), [orders])
-  useEffect(() => write(FAVORITES_KEY, favorites), [favorites])
-
-  const book = useCallback((draft: Omit<Booking, 'id' | 'createdAt'>) => {
-    const booking: Booking = { ...draft, id: makeId('bk'), createdAt: Date.now() }
-    setBookings((prev) => [booking, ...prev])
-    return booking
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
   }, [])
 
-  const cancelBooking = useCallback((id: string) => {
-    setBookings((prev) => prev.filter((item) => item.id !== id))
-  }, [])
+  /** Определяем режим один раз за сессию: отвечает ли /api. */
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
 
-  const order = useCallback((draft: Omit<Order, 'id' | 'createdAt'>) => {
-    const created: Order = { ...draft, id: makeId('ord'), createdAt: Date.now() }
-    setOrders((prev) => [created, ...prev])
-    return created
-  }, [])
+    api
+      .bookings()
+      .then((data) => {
+        if (cancelled || !mounted.current) return
+        setMode('api')
+        writeLocal(MODE_KEY, 'api')
+        setBookings(data.bookings)
+      })
+      .catch(() => {
+        if (cancelled || !mounted.current) return
+        setMode('demo')
+        writeLocal(MODE_KEY, 'demo')
+      })
+      .finally(() => {
+        if (!cancelled && mounted.current) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [attempt])
+
+  useEffect(() => {
+    if (mode === 'demo') writeLocal('dt.bookings.v1', bookings)
+  }, [bookings, mode])
+
+  useEffect(() => {
+    if (mode === 'demo') writeLocal('dt.orders.v1', orders)
+  }, [orders, mode])
+
+  useEffect(() => {
+    writeLocal('dt.favorites.v1', favorites)
+  }, [favorites])
+
+  const book = useCallback(
+    async (draft: Omit<Booking, 'id' | 'createdAt'>) => {
+      if (mode === 'api') {
+        try {
+          await api.createBooking(draft)
+          const data = await api.bookings()
+          if (mounted.current) setBookings(data.bookings)
+          return { ok: true }
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 401) {
+            if (mounted.current) {
+              setMode('demo')
+              writeLocal(MODE_KEY, 'demo')
+            }
+          }
+          return { ok: false, error: error instanceof Error ? error.message : 'Не удалось записаться' }
+        }
+      }
+
+      const booking: Booking = { ...draft, id: `bk-${Date.now().toString(36)}`, createdAt: Date.now() }
+      setBookings((prev) => [booking, ...prev])
+      return { ok: true }
+    },
+    [mode],
+  )
+
+  const cancelBooking = useCallback(
+    async (id: string) => {
+      if (mode === 'api') {
+        try {
+          await api.cancelBooking(id)
+          const data = await api.bookings()
+          if (mounted.current) setBookings(data.bookings)
+          return
+        } catch {
+          // Ниже — локальная отмена, чтобы интерфейс не залипал.
+        }
+      }
+      setBookings((prev) => prev.filter((item) => item.id !== id))
+    },
+    [mode],
+  )
+
+  const order = useCallback(
+    async (productId: string, quantity: number) => {
+      if (mode === 'api') {
+        try {
+          const created = await api.createOrder(productId, quantity)
+          const product = PRODUCTS.find((item) => item.id === productId)
+          if (mounted.current) {
+            setOrders((prev) => [
+              {
+                id: created.id,
+                productId,
+                title: product?.title ?? 'Товар',
+                price: created.price,
+                createdAt: Date.now(),
+              },
+              ...prev,
+            ])
+          }
+          return { ok: true }
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : 'Не удалось оформить' }
+        }
+      }
+
+      const product = PRODUCTS.find((item) => item.id === productId)
+      if (!product) return { ok: false, error: 'Товар недоступен' }
+      const created: Order = {
+        id: `ord-${Date.now().toString(36)}`,
+        productId,
+        title: product.title,
+        price: product.price * quantity,
+        createdAt: Date.now(),
+      }
+      setOrders((prev) => [created, ...prev])
+      return { ok: true }
+    },
+    [mode],
+  )
 
   const toggleFavorite = useCallback((productId: string) => {
     setFavorites((prev) =>
@@ -68,5 +189,29 @@ export function useStore(): Store {
     )
   }, [])
 
-  return { bookings, orders, favorites, book, cancelBooking, order, toggleFavorite }
+  const retry = useCallback(() => setAttempt((value) => value + 1), [])
+
+  return {
+    mode,
+    loading,
+    bookings,
+    orders,
+    favorites,
+    book,
+    cancelBooking,
+    order,
+    toggleFavorite,
+    retry,
+  }
+}
+
+/** Справочники для демо-режима (и подписи, которые не хранятся в API). */
+export function demoCatalog() {
+  return {
+    courts: COURTS,
+    coaches: COACHES,
+    sessions: SESSIONS,
+    slots: FREE_SLOTS,
+    products: PRODUCTS,
+  }
 }

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { PRODUCTS, PRODUCT_CATEGORIES } from '../data/club'
+import { PRODUCT_CATEGORIES } from '../data/club'
 import type { Product } from '../lib/types'
 import { ScreenHeader } from '../components/Chrome'
 import { IconBag, IconChevron, IconHeart, IconStar } from '../components/Icons'
@@ -10,18 +10,19 @@ const CATEGORIES = PRODUCT_CATEGORIES
 
 type Props = {
   favorites: string[]
+  products: Product[]
   orderCount: number
   onToggleFavorite: (id: string) => void
   onOpenProduct: (id: string) => void
   onOpenOrders: () => void
 }
 
-export function ShopScreen({ favorites, orderCount, onToggleFavorite, onOpenProduct, onOpenOrders }: Props) {
+export function ShopScreen({ favorites, products: allProducts, orderCount, onToggleFavorite, onOpenProduct, onOpenOrders }: Props) {
   const [category, setCategory] = useState<(typeof CATEGORIES)[number]>('Все')
 
   const products = useMemo(
-    () => PRODUCTS.filter((product) => category === 'Все' || product.category === category),
-    [category],
+    () => allProducts.filter((product) => category === 'Все' || product.category === category),
+    [allProducts, category],
   )
 
   return (

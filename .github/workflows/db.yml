@@ -1,0 +1,43 @@
+name: db
+
+# Применение схемы и демо-данных к Neon.
+# Секрет: DATABASE_URL (pooled-строка подключения Neon, sslmode=require).
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Загрузить демо-данные (db/seed.sql)'
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - 'db/**.sql'
+      - '.github/workflows/db.yml'
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверить секрет
+        run: |
+          if [ -z "${{ secrets.DATABASE_URL }}" ]; then
+            echo "::error::Не задан секрет DATABASE_URL"
+            exit 1
+          fi
+
+      - name: Установить psql
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
+      - name: Применить схему
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/schema.sql
+
+      - name: Загрузить демо-данные
+        if: github.event_name == 'workflow_dispatch' && inputs.seed
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seed.sql

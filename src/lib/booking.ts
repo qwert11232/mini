@@ -1,4 +1,4 @@
-import { COACHES, COURTS, FREE_SLOTS, SESSIONS } from '../data/club'
+import type { Catalog } from './api'
 import type { Booking } from './types'
 
 export type ActiveBooking = {
@@ -16,11 +16,11 @@ export type ActiveBooking = {
 
 const NO_COURT = 'Корт'
 
-export function bookingFromSession(sessionId: string): ActiveBooking | null {
-  const session = SESSIONS.find((item) => item.id === sessionId)
+export function bookingFromSession(catalog: Catalog, sessionId: string): ActiveBooking | null {
+  const session = catalog.sessions.find((item) => item.id === sessionId)
   if (!session) return null
-  const coach = COACHES.find((item) => item.id === session.coachId)
-  const court = COURTS.find((item) => item.id === session.courtId)
+  const coach = catalog.coaches.find((item) => item.id === session.coachId)
+  const court = catalog.courts.find((item) => item.id === session.courtId)
   const free = Math.max(session.seatsTotal - session.seatsTaken, 0)
 
   return {
@@ -37,10 +37,10 @@ export function bookingFromSession(sessionId: string): ActiveBooking | null {
   }
 }
 
-export function bookingFromSlot(slotId: string): ActiveBooking | null {
-  const slot = FREE_SLOTS.find((item) => item.id === slotId)
+export function bookingFromSlot(catalog: Catalog, slotId: string): ActiveBooking | null {
+  const slot = catalog.slots.find((item) => item.id === slotId)
   if (!slot) return null
-  const court = COURTS.find((item) => item.id === slot.courtId)
+  const court = catalog.courts.find((item) => item.id === slot.courtId)
 
   return {
     kind: 'free',

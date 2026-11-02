@@ -9,7 +9,7 @@ type Props = {
   favorite: boolean
   onClose: () => void
   onToggleFavorite: () => void
-  onOrder: (product: Product) => void
+  onOrder: (product: Product, quantity: number) => void
 }
 
 export function ProductSheet({ product, favorite, onClose, onToggleFavorite, onOrder }: Props) {
@@ -36,7 +36,7 @@ export function ProductSheet({ product, favorite, onClose, onToggleFavorite, onO
               </div>
               <span className="t-title3 t-num">{formatPrice(product.price * quantity)}</span>
             </div>
-            <button type="button" className="btn btn-primary btn-block" onClick={() => onOrder(product)}>
+            <button type="button" className="btn btn-primary btn-block" onClick={() => onOrder(product, quantity)}>
               Оформить
             </button>
           </div>

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { COURTS, FREE_SLOTS } from '../data/club'
+import type { Catalog } from '../lib/api'
 import type { Booking, Court } from '../lib/types'
 import { ScreenHeader } from '../components/Chrome'
 import { DayStrip } from '../components/DayStrip'
@@ -12,10 +12,12 @@ const DAYS = [0, 1, 2, 3, 4, 5, 6]
 
 type Props = {
   bookings: Booking[]
+  catalog: Catalog
   onBookSlot: (slotId: string) => void
 }
 
-export function PlayScreen({ bookings, onBookSlot }: Props) {
+export function PlayScreen({ bookings, catalog, onBookSlot }: Props) {
+  const { courts: COURTS, slots: FREE_SLOTS } = catalog
   const [day, setDay] = useState(0)
   const [courtId, setCourtId] = useState<string>('all')
 
@@ -24,7 +26,7 @@ export function PlayScreen({ bookings, onBookSlot }: Props) {
       FREE_SLOTS.filter((slot) => slot.dayOffset === day)
         .filter((slot) => courtId === 'all' || slot.courtId === courtId)
         .sort((a, b) => a.start.localeCompare(b.start)),
-    [day, courtId],
+    [FREE_SLOTS, day, courtId],
   )
 
   const bookedIds = new Set(bookings.filter((item) => item.kind === 'free').map((item) => item.sourceId))

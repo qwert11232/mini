@@ -18,10 +18,12 @@
   },
   "homepage": "https://github.com/qwert11232/mini#readme",
   "dependencies": {
+    "@neondatabase/serverless": "^1.2.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.2.0",

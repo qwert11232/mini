@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { CLUB, COACHES } from '../data/club'
+import { CLUB } from '../data/club'
+import type { Coach } from '../lib/types'
 import { ScreenHeader } from '../components/Chrome'
 import { BookingRow } from '../components/BookingRow'
 import {
@@ -7,6 +8,7 @@ import {
   CourtMark,
   IconArrowUpRight,
   IconChevronDown,
+  IconCloud,
   IconPhone,
   IconPin,
   IconStar,
@@ -45,10 +47,14 @@ const STATS = [
 
 type Props = {
   bookings: Booking[]
+  coaches: Coach[]
+  mode: 'api' | 'demo'
+  loading: boolean
+  onRetry: () => void
   onCancelBooking: (id: string) => void
 }
 
-export function AboutScreen({ bookings, onCancelBooking }: Props) {
+export function AboutScreen({ bookings, coaches: COACHES, mode, loading, onRetry, onCancelBooking }: Props) {
   const [openFaq, setOpenFaq] = useState<number | null>(0)
 
   return (
@@ -180,6 +186,34 @@ export function AboutScreen({ bookings, onCancelBooking }: Props) {
               <IconTelegram size={16} /> Написать в клуб
             </a>
             <span className="badge badge-green">Ответ до 15 минут</span>
+          </div>
+        </section>
+
+        <section className="stack gap-3">
+          <h2 className="t-title3">Синхронизация</h2>
+          <div className="group">
+            <div className="group-row">
+              <span className="group-icon"><IconCloud size={17} /></span>
+              <span className="grow stack">
+                <span className="t-subhead" style={{ fontWeight: 550 }}>
+                  {mode === 'api' ? 'Vercel + Neon' : 'Локальные демо-данные'}
+                </span>
+                <span className="t-footnote">
+                  {loading
+                    ? 'Проверяем соединение…'
+                    : mode === 'api'
+                      ? 'Записи сохраняются в базе клуба'
+                      : 'Сервер не подключён — записи сохраняются на устройстве'}
+                </span>
+              </span>
+              {mode === 'demo' ? (
+                <button type="button" className="btn-ghost t-subhead" onClick={onRetry}>
+                  Проверить
+                </button>
+              ) : (
+                <span className="badge badge-green">Онлайн</span>
+              )}
+            </div>
           </div>
         </section>
 

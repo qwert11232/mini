@@ -11,10 +11,10 @@ import { PlayScreen } from './screens/PlayScreen'
 import { ShopScreen } from './screens/ShopScreen'
 import { AboutScreen } from './screens/AboutScreen'
 import { useStore } from './lib/store'
+import { useCatalog } from './lib/useCatalog'
 import { bookingFromSession, bookingFromSlot, type ActiveBooking } from './lib/booking'
 import type { SectionId } from './lib/types'
 import { haptic, initTelegram } from './lib/telegram'
-import { PRODUCTS } from './data/club'
 import { dayName, endTime } from './lib/date'
 import './styles/tokens.css'
 import './styles/base.css'
@@ -27,6 +27,7 @@ export function App() {
   const [customOpen, setCustomOpen] = useState(false)
   const [ordersOpen, setOrdersOpen] = useState(false)
   const store = useStore()
+  const { catalog } = useCatalog()
   const { toast, show } = useToast()
 
   useEffect(() => {
@@ -37,53 +38,70 @@ export function App() {
     window.scrollTo({ top: 0, behavior: 'instant' })
   }, [section])
 
-  const openSession = useCallback((id: string) => {
-    setBookingTarget(bookingFromSession(id))
-  }, [])
+  const openSession = useCallback(
+    (id: string) => {
+      setBookingTarget(bookingFromSession(catalog, id))
+    },
+    [catalog],
+  )
 
-  const openSlot = useCallback((id: string) => {
-    setBookingTarget(bookingFromSlot(id))
-  }, [])
+  const openSlot = useCallback(
+    (id: string) => {
+      setBookingTarget(bookingFromSlot(catalog, id))
+    },
+    [catalog],
+  )
 
   const confirmBooking = useCallback(() => {
     if (!bookingTarget) return
-    store.book({
-      sourceId: bookingTarget.sourceId,
-      kind: bookingTarget.kind,
-      title: bookingTarget.title,
-      subtitle: bookingTarget.subtitle,
-      dayOffset: bookingTarget.dayOffset,
-      start: bookingTarget.start,
-      durationMin: bookingTarget.durationMin,
-      price: bookingTarget.price,
-    })
-    haptic('success')
-    show('Записано', `${dayName(bookingTarget.dayOffset)}, ${bookingTarget.start}–${endTime(bookingTarget.start, bookingTarget.durationMin)}`)
+    const target = bookingTarget
     setBookingTarget(null)
+    void store
+      .book({
+        sourceId: target.sourceId,
+        kind: target.kind,
+        title: target.title,
+        subtitle: target.subtitle,
+        dayOffset: target.dayOffset,
+        start: target.start,
+        durationMin: target.durationMin,
+        price: target.price,
+      })
+      .then((result) => {
+        if (result.ok) {
+          haptic('success')
+          show('Записано', `${dayName(target.dayOffset)}, ${target.start}–${endTime(target.start, target.durationMin)}`)
+        } else {
+          haptic('error')
+          show('Не удалось записаться', result.error)
+        }
+      })
   }, [bookingTarget, store, show])
 
   const activeProduct = useMemo(
-    () => PRODUCTS.find((product) => product.id === productId) ?? null,
-    [productId],
+    () => catalog.products.find((product) => product.id === productId) ?? null,
+    [catalog.products, productId],
   )
 
   return (
     <div className="app-shell">
       <main key={section}>
         {section === 'home' ? (
-          <HomeScreen bookings={store.bookings} onNavigate={setSection} onOpenSession={openSession} />
+          <HomeScreen bookings={store.bookings} catalog={catalog} onNavigate={setSection} onOpenSession={openSession} />
         ) : null}
         {section === 'schedule' ? (
           <ScheduleScreen
             bookings={store.bookings}
+            catalog={catalog}
             onOpenSession={openSession}
             onCreateCustom={() => setCustomOpen(true)}
           />
         ) : null}
-        {section === 'play' ? <PlayScreen bookings={store.bookings} onBookSlot={openSlot} /> : null}
+        {section === 'play' ? <PlayScreen bookings={store.bookings} catalog={catalog} onBookSlot={openSlot} /> : null}
         {section === 'shop' ? (
           <ShopScreen
             favorites={store.favorites}
+            products={catalog.products}
             orderCount={store.orders.length}
             onToggleFavorite={store.toggleFavorite}
             onOpenProduct={setProductId}
@@ -91,7 +109,14 @@ export function App() {
           />
         ) : null}
         {section === 'about' ? (
-          <AboutScreen bookings={store.bookings} onCancelBooking={store.cancelBooking} />
+          <AboutScreen
+            bookings={store.bookings}
+            coaches={catalog.coaches}
+            mode={store.mode}
+            loading={store.loading}
+            onRetry={store.retry}
+            onCancelBooking={store.cancelBooking}
+          />
         ) : null}
       </main>
 
@@ -107,31 +132,46 @@ export function App() {
         onToggleFavorite={() => {
           if (activeProduct) store.toggleFavorite(activeProduct.id)
         }}
-        onOrder={(product) => {
-          store.order({ productId: product.id, title: product.title, price: product.price })
-          haptic('success')
-          show('Заказ оформлен', `${product.title} · резерв 48 часов`)
+        onOrder={(product, quantity) => {
           setProductId(null)
+          void store.order(product.id, quantity).then((result) => {
+            if (result.ok) {
+              haptic('success')
+              show('Заказ оформлен', `${product.title} · резерв 48 часов`)
+            } else {
+              haptic('error')
+              show('Заказ не оформлен', result.error)
+            }
+          })
         }}
       />
 
       <CustomTrainingSheet
         open={customOpen}
         onClose={() => setCustomOpen(false)}
+        coaches={catalog.coaches}
         onBook={(draft) => {
-          store.book({
-            sourceId: `custom-${Date.now()}`,
-            kind: 'training',
-            title: draft.title,
-            subtitle: draft.subtitle,
-            dayOffset: draft.dayOffset,
-            start: draft.start,
-            durationMin: draft.durationMin,
-            price: draft.price,
-          })
-          haptic('success')
-          show('Тренер забронирован', `${dayName(draft.dayOffset)}, ${draft.start}`)
           setCustomOpen(false)
+          void store
+            .book({
+              sourceId: `custom-${Date.now()}`,
+              kind: 'training',
+              title: draft.title,
+              subtitle: draft.subtitle,
+              dayOffset: draft.dayOffset,
+              start: draft.start,
+              durationMin: draft.durationMin,
+              price: draft.price,
+            })
+            .then((result) => {
+              if (result.ok) {
+                haptic('success')
+                show('Тренер забронирован', `${dayName(draft.dayOffset)}, ${draft.start}`)
+              } else {
+                haptic('error')
+                show('Не удалось записаться', result.error)
+              }
+            })
         }}
       />
 

@@ -62,3 +62,7 @@ blob-report/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# ─── Локальный предпросмотр API: файловая «база» демо-данных ──────────────────
+.preview/
+.vercel/

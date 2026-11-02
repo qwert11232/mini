@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { COACHES, LEVELS } from '../data/club'
+import { LEVELS } from '../data/club'
+import type { Coach } from '../lib/types'
 import { Sheet } from './Sheet'
 import { IconCheck } from './Icons'
 import { dayName } from '../lib/date'
@@ -19,13 +20,15 @@ type Draft = {
 }
 
 type Props = {
+  coaches: Coach[]
   open: boolean
   onClose: () => void
   onBook: (draft: Draft) => void
 }
 
-export function CustomTrainingSheet({ open, onClose, onBook }: Props) {
+export function CustomTrainingSheet({ coaches: COACHES, open, onClose, onBook }: Props) {
   const [coachId, setCoachId] = useState(COACHES[0]?.id ?? '')
+
   const [level, setLevel] = useState<Level>('Любитель')
   const [dayOffset, setDayOffset] = useState(1)
   const [start, setStart] = useState(TIMES[2] ?? '12:00')
