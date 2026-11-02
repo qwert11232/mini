@@ -27,12 +27,15 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Проверить секрет DATABASE_URL
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "::error::Не задан секрет репозитория DATABASE_URL"
+            echo "::error::Секрет DATABASE_URL пуст или недоступен. Проверьте:"
+            echo "::error::1) Settings → Secrets and variables → Actions → New repository secret: имя DATABASE_URL"
+            echo "::error::2) Значение — pooled-строка Neon, начинается с postgresql:// и содержит sslmode=require"
+            echo "::error::3) Секрет должен быть в разделе Repository secrets, не в Variables и не в Environment secret без привязки"
             exit 1
           fi
 
