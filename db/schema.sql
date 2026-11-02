@@ -130,3 +130,12 @@ create table if not exists admin_audit (
 );
 
 create index if not exists admin_audit_time_idx on admin_audit (created_at desc);
+
+-- ─── Реальные даты занятий ───────────────────────────────────────────────────
+-- day_offset удобен фронтенду («сегодня/завтра»), но админке и напоминаниям нужна
+-- конкретная дата. starts_at заполняется при записи и пересчитывается сидом.
+alter table bookings add column if not exists starts_at timestamptz;
+alter table training_sessions add column if not exists starts_at timestamptz;
+alter table free_slots add column if not exists starts_at timestamptz;
+
+create index if not exists bookings_starts_at_idx on bookings (starts_at) where status = 'active';
