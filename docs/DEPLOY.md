@@ -59,11 +59,13 @@ curl -s localhost:5173/api/catalog    # корты, тренеры, заняти
 ## 2. Neon
 
 1. Neon уже подключён к Vercel: `DATABASE_URL` лежит в переменных проекта `mini`.
-2. Применить схему и демо-данные (база пока пустая). Вариант А — GitHub Actions:
-   добавьте секрет репозитория `DATABASE_URL` (та же pooled-строка Neon) и запустите
-   **Actions → db → Run workflow** с `seed = true`.
-   Вариант Б — вручную: `psql "$DATABASE_URL" -f db/schema.sql && psql "$DATABASE_URL" -f db/seed.sql`.
-   Workflow перед применением печатает состав таблиц, поэтому результат виден в логе.
+2. Схема и демо-данные применяются **автоматически при сборке на Vercel**:
+   `npm run build` = `node scripts/db-setup.mjs && tsc --noEmit && vite build`.
+   Скрипт видит `DATABASE_URL` из переменных проекта, применяет идемпотентные
+   `db/schema.sql` + `db/seed.sql` и печатает состав таблиц в лог сборки.
+   Если `DATABASE_URL` не задан (локально) — шаг молча пропускается, сборка не падает.
+3. Альтернатива — GitHub Actions: **Actions → db → Run workflow**. Требует секрет
+   репозитория `DATABASE_URL` (Actions не видит переменные Vercel).
 3. Проверка: `curl https://<проект>.vercel.app/api/health` → `{"ok":true,"db":"neondb","bot":true}`.
 
 Схема идемпотентна (`create table if not exists`, `on conflict`), сид тоже — можно

@@ -38,7 +38,7 @@
 | Команда запуска | `npm run dev` (0.0.0.0:5173) |
 | Команды проверок | `npm run typecheck` · `npm run build` · `npm run smoke` (jsdom + `/api`) |
 | Переменные окружения | `.env.example`: `DATABASE_URL`, `TELEGRAM_BOT_TOKEN` (только сервер), `ADMIN_TELEGRAM_IDS`, `ADMIN_TELEGRAM_USERNAMES`, `VITE_APP_URL`, `VITE_ADMIN_BOT_URL`. Секреты — панель Vercel |
-| Деплой | GitHub `qwert11232/mini` → Vercel-проект `mini` собирает **main**; домен-заглушка `mini-seven-xi.vercel.app`; бот `@testtesttennisbot`; админ `@nikita_tsk` (ID уточнить), оплата на ресепшене |
+| Деплой | GitHub `qwert11232/mini` → Vercel-проект `mini` собирает **main**, деплой зелёный; домен-заглушка `mini-seven-xi.vercel.app`; бот `@testtesttennisbot`; админ `@nikita_tsk` (ID `793536041` зашит), оплата на ресепшене |
 | Статус проверок | `typecheck` PASS, `build` PASS, `smoke` 7/7 PASS — 2026-11-02 |
 
 ### Что работает сейчас
@@ -94,6 +94,20 @@
 - Проверка: структура и ссылки между файлами сверены вручную; прикладной код отсутствует
   по определению — это шаблон.
 
+### Шаг 4: Деплой в main, схема через сборку Vercel
+- Контекст: PR #1 смержен; деплой Vercel падал, GitHub Actions `db` не видел секрет
+  `DATABASE_URL` (ни Secret, ни Variable не пробрасывались), сеть к Neon из песочницы закрыта.
+- Решение: из `vercel.json` убран неподдерживаемый `functions.runtime` (только
+  `maxDuration`), добавлен `engines.node=22.x` — деплой стал зелёным. Наполнение базы
+  перенесено в сборку: `scripts/db-setup.mjs` в `npm run build` применяет идемпотентные
+  schema+seed, где `DATABASE_URL` Vercel точно доступен; без переменной шаг пропускается.
+- Альтернативы: чинить секрет в Actions — доступ к настройкам секретов у токена закрыт,
+  владелец должен сделать руками; psql/`pg` из песочницы — TLS к Neon обрывается.
+- Риски: DDL на каждой сборке; спасает идемпотентность (`if not exists`, `on conflict`).
+  Если база недоступна, скрипт логирует ошибку и не валит сборку — сайт выйдет на демо-данных.
+- Проверка: Vercel status `success`; локально `npm run build` пропускает шаг без
+  `DATABASE_URL`; `smoke` 7/7; `typecheck` чист.
+
 ### Шаг 3: Координаты проекта и роль администратора
 - Контекст: владелец подключил Neon через Vercel, задал `TELEGRAM_BOT_TOKEN`, дал бота
   `@testtesttennisbot`, домен-заглушку `mini-seven-xi.vercel.app` и админа `@nikita_tsk`.
@@ -145,9 +159,9 @@
 
 ## 4. NEXT STEPS — что делать следующему агенту
 
-1. Смержить `arena/20f16b78-mini` в `main` (Vercel соберёт сайт) и запустить Actions `db`.
-2. Проверить `/api/health` и `/api/me` из бота `@testtesttennisbot`.
-3. Админ-панель в боте: `users.role`, `admin_audit` и `isAdmin()` уже готовы; нужен числовой ID `@nikita_tsk`.
+1. Открыть `https://mini-seven-xi.vercel.app` и `…/api/health`: должны быть живые данные из Neon.
+2. Открыть мини-апп из бота `@testtesttennisbot`, проверить `/api/me` (подпись initData).
+3. Админ-панель в боте: `users.role`, `admin_audit`, `isAdmin()` с ID `793536041` готовы.
 
 ## 5. Журнал обслуживания памяти
 
@@ -157,3 +171,4 @@
 | 2026-11-02 | Мини-апп ДТ: 5 разделов, записи, магазин, дизайн-система; обновлены state/лог/next steps | агент |
 | 2026-11-02 | Связка Vercel + Neon, API-слой, HMAC initData, локальный предпросмотр `/api` | агент |
 | 2026-11-02 | Координаты проекта, роль админа, workflow `db`, фикс времязависимого smoke | агент |
+| 2026-11-02 | Merge в main, фикс vercel.json, наполнение Neon на сборке | агент |

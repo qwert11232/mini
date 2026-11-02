@@ -29,6 +29,7 @@ Dev-сервер уже поднят как Live Preview — сайт можно
 | `npm run preview` | предпросмотр собранной версии на `0.0.0.0:4173` |
 | `npm run typecheck` | только проверка типов |
 | `npm run smoke` | рендер собранного бандла в jsdom + проверка ответов `/api` |
+| `npm run db:setup` | применить `db/schema.sql` + `db/seed.sql` к базе из `DATABASE_URL` |
 
 ## Разделы
 
