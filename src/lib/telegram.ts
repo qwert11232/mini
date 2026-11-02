@@ -77,5 +77,7 @@ export function userInitials(): string {
   return (first + last).toUpperCase() || 'ДТ'
 }
 
-/** Ссылка на бота администрирования — заполняется на этапе подключения бота. */
-export const ADMIN_BOT_URL = 'https://t.me/'
+/** Бот клуба и панель администратора (управление расписанием и бронями). */
+export const ADMIN_BOT_URL = import.meta.env.VITE_ADMIN_BOT_URL || 'https://t.me/testtesttennisbot'
+export const CLUB_BOT_NAME = import.meta.env.VITE_TELEGRAM_BOT_NAME || 'testtesttennisbot'
+export const APP_URL = import.meta.env.VITE_APP_URL || 'https://mini-seven-xi.vercel.app'

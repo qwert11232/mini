@@ -117,3 +117,16 @@ create table if not exists orders (
 );
 
 create index if not exists orders_user_idx on orders (user_id, created_at desc);
+
+-- ─── Администрирование ───────────────────────────────────────────────────────
+-- Роль хранится в users.role и выставляется сервером по ADMIN_TELEGRAM_IDS.
+-- Журнал действий админа в боте: кто, что и когда изменил.
+create table if not exists admin_audit (
+  id          uuid primary key default gen_random_uuid(),
+  telegram_id bigint not null,
+  action      text not null,
+  payload     jsonb not null default '{}',
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists admin_audit_time_idx on admin_audit (created_at desc);

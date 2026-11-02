@@ -15,6 +15,23 @@ Neon: users · courts · coaches · training_sessions · free_slots · bookings 
 
 ---
 
+## 0. Текущие координаты проекта
+
+| Что | Значение |
+| --- | --- |
+| GitHub | `qwert11232/mini` |
+| Vercel-проект | `mini` |
+| Production-домен (заглушка) | `https://mini-seven-xi.vercel.app` |
+| Neon | `ep-weathered-cell-b8fnxjpq-pooler.c-14.us-east-1.aws.neon.tech`, база `neondb` |
+| Бот | `@testtesttennisbot` |
+| Админ | `@nikita_tsk` |
+| Оплата | на ресепшене (`orders.status = reserved`), онлайн-платежей нет |
+
+Важно: Vercel собирает ветку **main**. Работа ведётся в `arena/20f16b78-mini`,
+поэтому изменения попадают на сайт только после merge в `main`.
+
+---
+
 ## 1. Посмотреть сайт здесь, без установки
 
 В песочнице уже запущен `npm run dev` — сайт доступен по превью-ссылке.
@@ -41,12 +58,12 @@ curl -s localhost:5173/api/catalog    # корты, тренеры, заняти
 
 ## 2. Neon
 
-1. На Vercel: **Storage → Create Database → Neon** (или через neon.tech) — база и
-   `DATABASE_URL` появятся в проекте автоматически.
-2. Применить схему и демо-данные. Вариант А — GitHub Actions
-   (`.github/workflows/db.yml`): добавьте секрет репозитория `DATABASE_URL` и запустите
-   workflow **db** (Run workflow, `seed = true`).
+1. Neon уже подключён к Vercel: `DATABASE_URL` лежит в переменных проекта `mini`.
+2. Применить схему и демо-данные (база пока пустая). Вариант А — GitHub Actions:
+   добавьте секрет репозитория `DATABASE_URL` (та же pooled-строка Neon) и запустите
+   **Actions → db → Run workflow** с `seed = true`.
    Вариант Б — вручную: `psql "$DATABASE_URL" -f db/schema.sql && psql "$DATABASE_URL" -f db/seed.sql`.
+   Workflow перед применением печатает состав таблиц, поэтому результат виден в логе.
 3. Проверка: `curl https://<проект>.vercel.app/api/health` → `{"ok":true,"db":"neondb","bot":true}`.
 
 Схема идемпотентна (`create table if not exists`, `on conflict`), сид тоже — можно

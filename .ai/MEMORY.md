@@ -37,7 +37,8 @@
 | Точка входа | `index.html` → `src/main.tsx` → `src/App.tsx` |
 | Команда запуска | `npm run dev` (0.0.0.0:5173) |
 | Команды проверок | `npm run typecheck` · `npm run build` · `npm run smoke` (jsdom + `/api`) |
-| Переменные окружения | `.env.example`: `DATABASE_URL`, `TELEGRAM_BOT_TOKEN` (только сервер), `VITE_APP_URL`, `VITE_ADMIN_BOT_URL`. Секреты — панель Vercel |
+| Переменные окружения | `.env.example`: `DATABASE_URL`, `TELEGRAM_BOT_TOKEN` (только сервер), `ADMIN_TELEGRAM_IDS`, `ADMIN_TELEGRAM_USERNAMES`, `VITE_APP_URL`, `VITE_ADMIN_BOT_URL`. Секреты — панель Vercel |
+| Деплой | GitHub `qwert11232/mini` → Vercel-проект `mini` собирает **main**; домен-заглушка `mini-seven-xi.vercel.app`; бот `@testtesttennisbot`; админ `@nikita_tsk` (ID уточнить), оплата на ресепшене |
 | Статус проверок | `typecheck` PASS, `build` PASS, `smoke` 7/7 PASS — 2026-11-02 |
 
 ### Что работает сейчас
@@ -55,7 +56,8 @@
 ### Что сломано / не проверено
 
 - Визуальная проверка скриншотами не выполнена: в песочнице нет libGL/libnss → браузер не запускается. Проверено типами, сборкой, jsdom и curl к `/api`.
-- Не проверено вживую: реальная Neon-база и подпись Telegram (нет `DATABASE_URL`/токена). SQL и HMAC написаны по спецификации, нужен первый прогон на Vercel.
+- Из песочницы недоступны Neon/Telegram/Vercel (только GitHub и npm), поэтому схема применяется через Actions `db`, а деплой — только через merge в `main`.
+- Не проверено вживую: реальная Neon-база и подпись Telegram. Секреты заданы владельцем в Vercel; нужен первый прогон после деплоя.
 - Оплаты и уведомлений нет; панель админа не сделана (ждёт ТЗ бота).
 
 ### Backlog (не входит в текущую задачу)
@@ -91,6 +93,20 @@
 - Риски: каркас без проектных значений бесполезен, пока разделы `[...]` не заполнены.
 - Проверка: структура и ссылки между файлами сверены вручную; прикладной код отсутствует
   по определению — это шаблон.
+
+### Шаг 3: Координаты проекта и роль администратора
+- Контекст: владелец подключил Neon через Vercel, задал `TELEGRAM_BOT_TOKEN`, дал бота
+  `@testtesttennisbot`, домен-заглушку `mini-seven-xi.vercel.app` и админа `@nikita_tsk`.
+  Из песочницы сеть доступна только к GitHub/npm — Neon, Telegram и Vercel не открываются.
+- Решение: `ADMIN_BOT_URL`/`CLUB_BOT_NAME`/`APP_URL` читают `VITE_*` с рабочими значениями;
+  добавлен `isAdmin()` (ID + username, только сервер), `/api/me` отдаёт `isAdmin`,
+  в схеме появился `admin_audit`; workflow `db` применяет схему и печатает состав таблиц.
+- Альтернативы: применять SQL из песочницы — невозможно (SSL/HTTP к Neon закрыт);
+  локальный pg-клиент даёт «Connection terminated».
+- Риски: `ADMIN_TELEGRAM_IDS` пока пуст — вход в админку по username `nikita_tsk`;
+  username можно сменить, поэтому нужен числовой ID.
+- Проверка: `typecheck`, `build`, `smoke` (7/7 после переноса фикстуры на завтра), dev-сервер
+  и `/api/health` локально.
 
 ### Шаг 2: Vercel + Neon + вход из Telegram
 - Контекст: владелец выбрал связку Vercel + Neon; мини-апп открывает сайт из Telegram Apps.
@@ -129,9 +145,9 @@
 
 ## 4. NEXT STEPS — что делать следующему агенту
 
-1. Первый деплой по `docs/DEPLOY.md`: Neon → GitHub Actions (db) → Vercel env → BotFather.
-2. Дождаться ТЗ админ-панели и данных бота; реализовать её на готовых таблицах (роль `admin`).
-3. Cron-напоминания за 2 часа и оплата заказов/занятий.
+1. Смержить `arena/20f16b78-mini` в `main` (Vercel соберёт сайт) и запустить Actions `db`.
+2. Проверить `/api/health` и `/api/me` из бота `@testtesttennisbot`.
+3. Админ-панель в боте: `users.role`, `admin_audit` и `isAdmin()` уже готовы; нужен числовой ID `@nikita_tsk`.
 
 ## 5. Журнал обслуживания памяти
 
@@ -140,3 +156,4 @@
 | 2026-11-02 | Инициализация каркаса `.ai/` | каркас |
 | 2026-11-02 | Мини-апп ДТ: 5 разделов, записи, магазин, дизайн-система; обновлены state/лог/next steps | агент |
 | 2026-11-02 | Связка Vercel + Neon, API-слой, HMAC initData, локальный предпросмотр `/api` | агент |
+| 2026-11-02 | Координаты проекта, роль админа, workflow `db`, фикс времязависимого smoke | агент |

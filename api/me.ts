@@ -1,5 +1,5 @@
 import { HttpError, failure, getDb, json } from './_lib/db'
-import { verifyInitData } from './_lib/telegram'
+import { isAdmin, verifyInitData } from './_lib/telegram'
 
 /**
  * GET /api/me — проверка подписи Telegram при открытии мини-аппа.
@@ -33,7 +33,12 @@ export default async function handler(request: Request): Promise<Response> {
     `
 
     return json({
-      user: { id: user.id, firstName: user.firstName, lastName: user.lastName },
+      user: {
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        isAdmin: isAdmin(user),
+      },
       hasBookings: Boolean(profile && (profile as { id?: string }).id),
     })
   } catch (error) {

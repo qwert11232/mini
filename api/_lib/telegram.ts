@@ -79,6 +79,24 @@ export async function resolveUser(request: Request): Promise<TelegramUser | null
   return verifyInitData(initData)
 }
 
+/**
+ * Админ определяется по списку Telegram ID (или username как запасной вариант).
+ * Права проверяются только на сервере — фронтенд ничего не решает.
+ */
+export function isAdmin(user: TelegramUser & { username?: string | null }): boolean {
+  const ids = (process.env.ADMIN_TELEGRAM_IDS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+  if (ids.includes(String(user.id))) return true
+
+  const usernames = (process.env.ADMIN_TELEGRAM_USERNAMES ?? '')
+    .split(',')
+    .map((value) => value.trim().replace(/^@/, '').toLowerCase())
+    .filter(Boolean)
+  return Boolean(user.username && usernames.includes(user.username.toLowerCase()))
+}
+
 export function isPreviewMode(): boolean {
   return process.env.PREVIEW_MODE === '1' || process.env.VERCEL_ENV === 'preview'
 }

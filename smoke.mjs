@@ -22,7 +22,7 @@ const catalog = {
   sessions: [
     {
       id: 's1', title: 'Группа · начальный уровень', group: 'Группа', level: 'Новичок',
-      coachId: 'k1', courtId: 'c3', dayOffset: 0, start: '09:00', durationMin: 90, price: 1400,
+      coachId: 'k1', courtId: 'c3', dayOffset: 1, start: '09:00', durationMin: 90, price: 1400,
       seatsTotal: 6, seatsTaken: 4,
     },
   ],
@@ -36,6 +36,7 @@ const catalog = {
 }
 
 const calls = []
+// Фикстура занятия — на завтра: проверка не должна зависеть от текущего времени.
 window.fetch = async (url) => {
   calls.push(String(url))
   const body = String(url).includes('/api/bookings')
