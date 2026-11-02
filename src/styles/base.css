@@ -1,0 +1,484 @@
+/* =============================================================================
+   ДТ · Базовые стили и примитивы интерфейса (iOS-экосистема)
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: var(--fs-body);
+  line-height: 1.42;
+  color: var(--text);
+  background: var(--clay-100);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior-y: none;
+  text-rendering: optimizeLegibility;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+ul,
+ol,
+figure {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--green-600);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: var(--green-200);
+}
+
+/* ── Каркас экрана ────────────────────────────────────────────────────────── */
+
+.app-shell {
+  position: relative;
+  min-height: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  background: var(--bg);
+  /* Белая глина: зерно + очень мягкий зелёный градиент сверху */
+  background-image:
+    var(--texture-grain),
+    radial-gradient(120% 60% at 50% -10%, rgba(26, 131, 80, 0.13), transparent 70%);
+  background-attachment: fixed;
+  overflow-x: clip;
+  padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 14px);
+}
+
+.screen {
+  animation: screen-in var(--dur) var(--ease-soft) both;
+}
+
+@keyframes screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.pad {
+  padding-inline: var(--gutter);
+}
+
+/* ── Типографика ──────────────────────────────────────────────────────────── */
+
+.t-large {
+  font-size: var(--fs-large);
+  line-height: 1.06;
+  letter-spacing: -0.03em;
+  font-weight: 700;
+}
+
+.t-title1 {
+  font-size: var(--fs-title1);
+  line-height: 1.1;
+  letter-spacing: -0.026em;
+  font-weight: 700;
+}
+
+.t-title2 {
+  font-size: var(--fs-title2);
+  line-height: 1.16;
+  letter-spacing: -0.022em;
+  font-weight: 700;
+}
+
+.t-title3 {
+  font-size: var(--fs-title3);
+  line-height: 1.2;
+  letter-spacing: -0.018em;
+  font-weight: 650;
+}
+
+.t-headline {
+  font-size: var(--fs-headline);
+  line-height: 1.28;
+  letter-spacing: -0.012em;
+  font-weight: 600;
+}
+
+.t-body {
+  font-size: var(--fs-body);
+  line-height: 1.45;
+}
+
+.t-subhead {
+  font-size: var(--fs-subhead);
+  line-height: 1.4;
+}
+
+.t-footnote {
+  font-size: var(--fs-footnote);
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.t-caption {
+  font-size: var(--fs-caption);
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.t-muted {
+  color: var(--text-secondary);
+}
+
+.t-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+}
+
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.gap-1 { gap: var(--sp-1); }
+.gap-2 { gap: var(--sp-2); }
+.gap-3 { gap: var(--sp-3); }
+.gap-4 { gap: var(--sp-4); }
+.gap-5 { gap: var(--sp-5); }
+
+.grow { flex: 1; min-width: 0; }
+.nowrap { white-space: nowrap; }
+
+/* ── Стекло (iOS glass) ───────────────────────────────────────────────────── */
+
+.glass {
+  background: var(--surface-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+}
+
+/* ── Карточки: группированный список iOS / «инсет» ───────────────────────── */
+
+.card {
+  position: relative;
+  background: var(--clay-0);
+  background-image: var(--texture-grain);
+  border-radius: var(--r-lg);
+  box-shadow:
+    var(--shadow-xs),
+    inset 0 0 0 1px rgba(22, 33, 26, 0.05);
+}
+
+.card-pad {
+  padding: var(--sp-4);
+}
+
+.card-press {
+  transition: transform var(--dur-fast) var(--ease-ios), box-shadow var(--dur-fast) var(--ease-ios);
+}
+
+.card-press:active {
+  transform: scale(0.977);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px rgba(22, 33, 26, 0.06);
+}
+
+/* Группированный список в стиле «Настроек» */
+.group {
+  background: var(--clay-0);
+  background-image: var(--texture-grain);
+  border-radius: var(--r-lg);
+  box-shadow:
+    var(--shadow-xs),
+    inset 0 0 0 1px rgba(22, 33, 26, 0.05);
+  overflow: hidden;
+}
+
+.group-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: 13px var(--sp-4);
+  text-align: left;
+  transition: background var(--dur-fast) linear;
+}
+
+.group-row + .group-row {
+  box-shadow: inset 0 1px 0 var(--separator);
+}
+
+.group-row:active {
+  background: var(--clay-50);
+}
+
+.group-label {
+  padding: var(--sp-5) var(--sp-4) var(--sp-2);
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* ── Кнопки ───────────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-height: 50px;
+  padding: 0 var(--sp-5);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-headline);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  transition:
+    transform var(--dur-fast) var(--ease-ios),
+    filter var(--dur-fast) linear,
+    background var(--dur-fast) linear;
+  user-select: none;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+}
+
+.btn-block {
+  display: flex;
+  width: 100%;
+}
+
+.btn-primary {
+  color: var(--on-accent);
+  background: linear-gradient(180deg, var(--green-500), var(--green-700));
+  background-image: var(--texture-felt), linear-gradient(180deg, var(--green-500), var(--green-700));
+  box-shadow:
+    0 10px 22px -12px rgba(16, 80, 58, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.btn-primary:active {
+  filter: brightness(0.95);
+}
+
+.btn-tonal {
+  color: var(--green-700);
+  background: var(--green-100);
+}
+
+.btn-ghost {
+  color: var(--accent);
+  background: transparent;
+  min-height: 44px;
+  padding: 0 var(--sp-3);
+}
+
+.btn-glass {
+  color: var(--clay-900);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-sm {
+  min-height: 38px;
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-subhead);
+}
+
+/* ── Чипы, бейджи, сегменты ───────────────────────────────────────────────── */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-subhead);
+  font-weight: 550;
+  color: var(--clay-700);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(22, 33, 26, 0.07);
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) linear,
+    color var(--dur-fast) linear,
+    transform var(--dur-fast) var(--ease-ios);
+}
+
+.chip:active {
+  transform: scale(0.96);
+}
+
+.chip[aria-pressed='true'],
+.chip.is-active {
+  color: var(--on-accent);
+  background: linear-gradient(180deg, var(--green-600), var(--green-800));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-caption);
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badge-green {
+  color: var(--green-800);
+  background: var(--green-100);
+}
+
+.badge-lime {
+  color: var(--green-950);
+  background: var(--lime-300);
+}
+
+.badge-dark {
+  color: var(--green-50);
+  background: rgba(5, 36, 23, 0.66);
+  backdrop-filter: blur(10px);
+}
+
+.badge-muted {
+  color: var(--text-secondary);
+  background: var(--clay-100);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+/* ── Скролл-лента чипов ───────────────────────────────────────────────────── */
+
+.scroller {
+  display: flex;
+  gap: var(--sp-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+  padding-inline: var(--gutter);
+  margin-inline: calc(-1 * var(--gutter));
+  padding-block: 2px;
+}
+
+.scroller::-webkit-scrollbar {
+  display: none;
+}
+
+.scroller > * {
+  scroll-snap-align: start;
+  flex: none;
+}
+
+/* ── Разделители и утилиты ────────────────────────────────────────────────── */
+
+.hr {
+  height: 1px;
+  background: var(--separator);
+  border: 0;
+  margin: 0;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}

@@ -1,0 +1,59 @@
+name: db
+
+# Применение схемы и демо-данных к Neon из GitHub Actions.
+# Секреты репозитория: DATABASE_URL (pooled-строка Neon, sslmode=require).
+# Запуск: Actions → db → Run workflow. Или автоматически при изменении db/*.sql в main.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Загрузить демо-данные (db/seed.sql)'
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - 'db/**.sql'
+      - '.github/workflows/db.yml'
+
+concurrency:
+  group: db-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверить секрет DATABASE_URL
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Не задан секрет репозитория DATABASE_URL"
+            exit 1
+          fi
+
+      - name: Установить psql
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Применить схему
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/schema.sql
+
+      - name: Загрузить демо-данные
+        if: github.event_name == 'workflow_dispatch' && inputs.seed
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seed.sql
+
+      - name: Проверить, что таблицы на месте
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+            select 'courts' as table, count(*) from courts
+            union all select 'coaches', count(*) from coaches
+            union all select 'training_sessions', count(*) from training_sessions
+            union all select 'free_slots', count(*) from free_slots
+            union all select 'products', count(*) from products;
+          "
