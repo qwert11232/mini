@@ -1,0 +1,15 @@
+{
+  "//": "Конфиг для транспиляции серверных функций. Vercel ищет tsconfig рядом с функциями; здесь намеренно нет `types`, чтобы сборка функции не зависела от установленных пакетов (@types/node, vite/client и т.п.).",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": [],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "esModuleInterop": true
+  },
+  "include": ["**/*.ts"]
+}
