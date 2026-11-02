@@ -1,0 +1,21 @@
+{
+  "//": "Конфиг для серверных функций Vercel. Намеренно самодостаточный: никаких `types`, чтобы транспиляция функции не зависела от установленных пакетов.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "allowJs": false,
+    "types": []
+  },
+  "include": [
+    "api/**/*.ts"
+  ]
+}

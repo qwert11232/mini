@@ -59,14 +59,23 @@ curl -s localhost:5173/api/catalog    # корты, тренеры, заняти
 ## 2. Neon
 
 1. Neon уже подключён к Vercel: `DATABASE_URL` лежит в переменных проекта `mini`.
-2. Схема и демо-данные применяются **автоматически при сборке на Vercel**:
-   `npm run build` = `node scripts/db-setup.mjs && tsc --noEmit && vite build`.
-   Скрипт видит `DATABASE_URL` из переменных проекта, применяет идемпотентные
-   `db/schema.sql` + `db/seed.sql` и печатает состав таблиц в лог сборки.
-   Если `DATABASE_URL` не задан (локально) — шаг молча пропускается, сборка не падает.
-3. Альтернатива — GitHub Actions: **Actions → db → Run workflow**. Требует секрет
-   репозитория `DATABASE_URL` (Actions не видит переменные Vercel).
-3. Проверка: `curl https://<проект>.vercel.app/api/health` → `{"ok":true,"db":"neondb","bot":true}`.
+2. **Схема и демо-данные накатываются из функции, не из сборки.** На этапе сборки
+   `DATABASE_URL` недоступна (в логе: `[db-setup] DATABASE_URL не задан`), поэтому
+   применяем одной ссылкой из браузера:
+
+   ```
+   https://mini-seven-xi.vercel.app/api/admin/setup?token=<ADMIN_SETUP_TOKEN>
+   ```
+
+   Ответ: `{"ok":true,"applied":18,"counts":{"courts":4,"coaches":4,...}}`.
+   Схема и сид идемпотентны — повторный вызов безопасен.
+3. Альтернативы: GitHub Actions (**Actions → db → Run workflow**, нужен секрет
+   репозитория `DATABASE_URL`) или `psql "$DATABASE_URL" -f db/schema.sql && psql "$DATABASE_URL" -f db/seed.sql`.
+4. Проверка: `https://<проект>.vercel.app/api/ping` → `{"ok":true,"node":"v22.x",...}`,
+   затем `/api/health?diag=1` → `ok: true` и данные из Neon.
+
+> Почему не build-скрипт: Vercel не передаёт `DATABASE_URL` в окружение сборки
+> (видно в логе деплоя), зато переменная есть у функций.
 
 Схема идемпотентна (`create table if not exists`, `on conflict`), сид тоже — можно
 применять повторно. Таблицы: `users`, `courts`, `coaches`, `training_sessions`,
