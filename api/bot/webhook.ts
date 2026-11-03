@@ -1,21 +1,46 @@
 import { audit, getDb, isAdmin } from './_lib/db.js'
-import { answerCallback, editMessage, sendMessage, webhookSecret, type Update } from './_lib/telegram.js'
 import {
+  answerCallback,
+  editMessage,
+  sendMessage,
+  webhookSecret,
+  type Update,
+} from './_lib/telegram.js'
+import {
+  cancelBooking,
+  markIssued,
+  shiftSeats,
+} from './_lib/bookings.js'
+import {
+  closeSlot,
+  markVisited,
+  openSlot,
+  repairSchema,
+  reserveSeat,
+  restoreBooking,
+  toggleProduct,
+  saveNote,
+  setRole,
+  setSessionPrice,
+  type Result,
+} from './_lib/admin.js'
+import {
+  appUrl,
+  auditScreen,
+  courtsScreen,
   dayScreen,
+  dbErrorScreen,
+  helpScreen,
   menuScreen,
   ordersScreen,
+  priceHint,
+  productsScreen,
   sessionsScreen,
+  slotsScreen,
   usersScreen,
   type Screen,
 } from './_lib/screens.js'
-
-/**
- * POST /api/bot/webhook — единственная точка входа бота.
- *
- * Бот работает как панель администратора: смотрит записи по дням, отменяет их,
- * правит заполненность занятий и выдаёт заказы. Все действия проверяют права
- * на сервере и попадают в admin_audit. Клиентский мини-апп сюда не ходит.
- */
+import { SCHEMA, SEED } from '../_lib/schema.js'
 
 const HELP = [
   '<b>ДТ · бот клуба</b>',
@@ -25,10 +50,18 @@ const HELP = [
   '/tomorrow — записи на завтра',
   '/schedule — расписание занятий',
   '/orders — заказы к выдаче',
-  '/me — моя карточка игрока',
+  '/me — мои записи',
+  '/help — эта справка',
   '',
   'Записаться на занятие и арендовать корт можно в приложении.',
 ].join('\n')
+
+/** Состояние диалога: админ присылает цену или заметку текстом. */
+type Pending =
+  | { kind: 'price'; sessionId: string }
+  | { kind: 'note'; playerId: string }
+
+const pending = new Map<number, Pending>()
 
 async function handler(request: Request): Promise<Response> {
   if (request.method !== 'POST') {
@@ -56,9 +89,9 @@ async function handler(request: Request): Promise<Response> {
 
   try {
     if (update.callback_query) {
-      await handleCallback(update)
+      await safe(update.callback_query.from.id, () => handleCallback(update))
     } else if (update.message?.text) {
-      await handleMessage(update)
+      await safe(update.message.from?.id, () => handleMessage(update))
     }
   } catch (error) {
     console.error('[bot] ошибка обработки', error instanceof Error ? error.message : error)
@@ -70,51 +103,47 @@ async function handler(request: Request): Promise<Response> {
 
 /**
  * Раньше ошибка «база не подключена» уходила только в лог, а Telegram получал 200 —
- * в чате была тишина, и причину приходилось искать по /api/health. Теперь админ
- * получает объяснение и ссылку на диагностику.
+ * в чате была тишина. Теперь админ видит причину и кнопку починки схемы.
  */
-async function withDb(chatId: number, work: () => Promise<void>): Promise<void> {
+async function safe(chatId: number | undefined, work: () => Promise<void>): Promise<void> {
   try {
     await work()
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
-    console.error('[bot] ошибка работы с базой', reason)
-    if (chatId > 0) {
-      await sendMessage(
-        chatId,
-        [
-          '<b>Панель временно недоступна</b>',
-          '',
-          `Причина: ${escapeHtml(reason)}`,
-          '',
-          'Проверка связки: /api/health?diag=1 — там видно, задана ли строка подключения к базе.',
-        ].join('\n'),
-      )
-    } else {
-      await sendMessage(chatId, 'Панель временно недоступна: база не отвечает.')
-    }
+    console.error('[bot] ошибка', reason)
+    if (!chatId) return
+    const screen = await dbErrorScreen(reason)
+    await sendMessage(chatId, screen.text, screen.keyboard)
   }
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
+// ─── Сообщения ──────────────────────────────────────────────────────────────
 
 async function handleMessage(update: Update): Promise<void> {
   const message = update.message
-  if (!message?.from) return
-
-  const from = message.from
-  if (!from) return
+  const from = message?.from
+  if (!message || !from) return
 
   const chatId = message.chat.id
   const admin = isAdmin(from.id, from.username)
   const text = (message.text ?? '').trim()
   const command = text.split(/\s+/)[0]?.replace(/@.*$/, '').toLowerCase() ?? ''
 
+  // Текстовый ввод: цена занятия или заметка об игроке.
+  const waiting = pending.get(chatId)
+  if (waiting && admin && !text.startsWith('/')) {
+    pending.delete(chatId)
+    const result =
+      waiting.kind === 'price'
+        ? await setSessionPrice(waiting.sessionId, Number(text.replace(/[^\d]/g, '')), from.id)
+        : await saveNote(waiting.playerId, text)
+    await answer(chatId, result, waiting.kind === 'price' ? await sessionsScreen(0) : await usersScreen())
+    return
+  }
+
   if (command === '/start') {
     if (admin) {
-      await withDb(chatId, async () => render(chatId, await menuScreen()))
+      await render(chatId, await menuScreen())
     } else {
       await sendMessage(chatId, HELP, {
         inline_keyboard: [[{ text: '🎾 Открыть приложение', url: appUrl() }]],
@@ -124,7 +153,7 @@ async function handleMessage(update: Update): Promise<void> {
   }
 
   if (command === '/me') {
-    await withDb(chatId, () => meScreen(chatId, from.id))
+    await meScreen(chatId, from.id)
     return
   }
 
@@ -135,30 +164,28 @@ async function handleMessage(update: Update): Promise<void> {
     return
   }
 
-  await withDb(chatId, async () => {
-    switch (command) {
-      case '/today':
-        await render(chatId, await dayScreen(0))
-        break
-      case '/tomorrow':
-        await render(chatId, await dayScreen(1))
-        break
-      case '/schedule':
-        await render(chatId, await sessionsScreen(0))
-        break
-      case '/orders':
-        await render(chatId, await ordersScreen())
-        break
-      case '/help':
-        await sendMessage(chatId, HELP)
-        break
-      default:
-        await render(chatId, await menuScreen())
-    }
-  })
+  switch (command) {
+    case '/today':
+      await render(chatId, await dayScreen(0))
+      break
+    case '/tomorrow':
+      await render(chatId, await dayScreen(1))
+      break
+    case '/schedule':
+      await render(chatId, await sessionsScreen(0))
+      break
+    case '/orders':
+      await render(chatId, await ordersScreen())
+      break
+    case '/help':
+      await render(chatId, await helpScreen())
+      break
+    default:
+      await render(chatId, await menuScreen())
+  }
 }
 
-/** Мои записи — читается без админских прав, поэтому вынесено отдельной функцией. */
+/** Мои записи — читается без админских прав. */
 async function meScreen(chatId: number, telegramId: number): Promise<void> {
   const sql = getDb()
   const rows = (await sql`
@@ -180,6 +207,8 @@ async function meScreen(chatId: number, telegramId: number): Promise<void> {
   await sendMessage(chatId, [`<b>Ваши записи</b>`, '', ...lines].join('\n'))
 }
 
+// ─── Кнопки ─────────────────────────────────────────────────────────────────
+
 async function handleCallback(update: Update): Promise<void> {
   const query = update.callback_query
   if (!query) return
@@ -197,7 +226,19 @@ async function handleCallback(update: Update): Promise<void> {
     return
   }
 
-  const [action, arg] = data.split(':')
+  // id окна аренды содержит время («c1-18:00»), поэтому делим только по первому
+  // двоеточию — иначе аргумент обрезался и кнопки свободной игры не срабатывали.
+  const separator = data.indexOf(':')
+  const action = separator === -1 ? data : data.slice(0, separator)
+  const arg = separator === -1 ? '' : data.slice(separator + 1)
+  const adminId = query.from.id
+
+  /** Изменение данных: ответ в toast + перерисовка нужного экрана. */
+  const change = async (run: () => Promise<Result>, screen: () => Promise<Screen>) => {
+    const result = await run()
+    await answerCallback(query.id, result.ok ? result.message ?? 'Готово' : result.message)
+    if (result.ok) await render(chatId, await screen(), messageId)
+  }
 
   switch (action) {
     case 'menu':
@@ -205,16 +246,25 @@ async function handleCallback(update: Update): Promise<void> {
       await render(chatId, await menuScreen(), messageId)
       return
 
-    case 'day':
+    case 'help':
       await answerCallback(query.id)
-      await render(chatId, await dayScreen(Number(arg ?? 0)), messageId)
+      await render(chatId, await helpScreen(), messageId)
       return
 
-    case 'sessions': {
+    case 'day':
       await answerCallback(query.id)
-      await render(chatId, await sessionsScreen(Number(arg ?? 0)), messageId)
+      await render(chatId, await dayScreen(Number(arg || 0)), messageId)
       return
-    }
+
+    case 'sessions':
+      await answerCallback(query.id)
+      await render(chatId, await sessionsScreen(Number(arg || 0)), messageId)
+      return
+
+    case 'slots':
+      await answerCallback(query.id)
+      await render(chatId, await slotsScreen(Number(arg || 0)), messageId)
+      return
 
     case 'orders':
       await answerCallback(query.id)
@@ -226,26 +276,80 @@ async function handleCallback(update: Update): Promise<void> {
       await render(chatId, await usersScreen(), messageId)
       return
 
-    case 'cancel': {
-      const result = await cancelBooking(arg ?? '', query.from.id)
-      await answerCallback(query.id, result.ok ? 'Запись отменена' : 'Не удалось отменить')
-      await render(chatId, await dayScreen(0), messageId)
+    case 'courts':
+      await answerCallback(query.id)
+      await render(chatId, await courtsScreen(), messageId)
       return
-    }
+
+    case 'products':
+      await answerCallback(query.id)
+      await render(chatId, await productsScreen(), messageId)
+      return
+
+    case 'audit':
+      await answerCallback(query.id)
+      await render(chatId, await auditScreen(), messageId)
+      return
+
+    case 'cancel':
+      return change(() => cancelBooking(arg, adminId), async () => dayScreen(0))
+
+    case 'visited':
+      return change(() => markVisited(arg, adminId), async () => dayScreen(0))
 
     case 'seats':
     case 'seatplus': {
       const delta = action === 'seatplus' ? 1 : -1
-      const result = await shiftSeats(arg ?? '', delta, query.from.id)
-      await answerCallback(query.id, result.ok ? 'Места обновлены' : 'Не удалось изменить места')
-      await render(chatId, await sessionsScreen(0), messageId)
+      return change(() => shiftSeats(arg, delta, adminId), async () => sessionsScreen(0))
+    }
+
+    case 'seatreserve':
+      return change(() => reserveSeat(arg, adminId), async () => sessionsScreen(0))
+
+    case 'sessprice':
+      await answerCallback(query.id)
+      pending.set(chatId, { kind: 'price', sessionId: arg })
+      await render(chatId, await priceHint(arg), messageId)
+      return
+
+    case 'slotclose':
+      return change(() => closeSlot(arg, adminId), async () => slotsScreen(0))
+
+    case 'slotopen':
+      return change(() => openSlot(arg, adminId), async () => slotsScreen(0))
+
+    case 'issued':
+      return change(() => markIssued(arg, adminId), async () => ordersScreen())
+
+    case 'restore':
+      return change(() => restoreBooking(arg, adminId), async () => dayScreen(0))
+
+    case 'prodtoggle':
+      return change(() => toggleProduct(arg, adminId), async () => productsScreen())
+
+    case 'note':
+      await answerCallback(query.id)
+      pending.set(chatId, { kind: 'note', playerId: arg })
+      await editMessage(
+        chatId,
+        messageId,
+        '<b>Заметка об игроке</b>\n\nПришлите текст одним сообщением — он виден только в панели.',
+        { inline_keyboard: [[{ text: '‹ Игроки', callback_data: 'users' }]] },
+      )
+      return
+
+    case 'role': {
+      const result = await setRole(arg, 'coach')
+      await answerCallback(query.id, result.ok ? 'Роль: тренер' : result.message)
+      await render(chatId, await usersScreen(), messageId)
       return
     }
 
-    case 'issued': {
-      const result = await markIssued(arg ?? '', query.from.id)
-      await answerCallback(query.id, result.ok ? 'Заказ выдан' : 'Заказ уже выдан')
-      await render(chatId, await ordersScreen(), messageId)
+    case 'repair': {
+      const result = await repairSchema([...SCHEMA, ...SEED])
+      await audit(adminId, 'schema.repair', { statements: result.applied })
+      await answerCallback(query.id, `Схема обновлена: ${result.applied}`)
+      await render(chatId, await menuScreen(), messageId)
       return
     }
 
@@ -255,89 +359,18 @@ async function handleCallback(update: Update): Promise<void> {
   }
 }
 
+/** Ответ после текстового ввода: короткое подтверждение + экран. */
+async function answer(chatId: number, result: Result, screen: Screen): Promise<void> {
+  await sendMessage(chatId, result.ok ? `Готово: ${result.message ?? ''}` : `Не вышло: ${result.message}`)
+  await render(chatId, screen)
+}
+
 async function render(chatId: number, screen: Screen, messageId?: number): Promise<void> {
   if (messageId) {
     await editMessage(chatId, messageId, screen.text, screen.keyboard)
     return
   }
   await sendMessage(chatId, screen.text, screen.keyboard)
-}
-
-type Result = { ok: true } | { ok: false; message: string }
-
-/** Отмена записи админом: возвращает место или окно аренды в продажу. */
-async function cancelBooking(bookingId: string, adminTelegramId: number): Promise<Result> {
-  if (!bookingId) return { ok: false, message: 'Запись не найдена' }
-  const sql = getDb()
-
-  const cancelled = (await sql`
-    update bookings
-    set status = 'cancelled', cancelled_at = now()
-    where id = ${bookingId} and status = 'active'
-    returning kind, source_id as "sourceId", title
-  `) as unknown as { kind: string; sourceId: string; title: string }[]
-
-  const row = cancelled[0]
-  if (!row) return { ok: false, message: 'Запись уже отменена' }
-
-  if (row.kind === 'free') {
-    await sql`update free_slots set is_active = true where id = ${row.sourceId}`
-  } else {
-    await sql`update training_sessions set seats_taken = greatest(seats_taken - 1, 0) where id = ${row.sourceId}`
-  }
-
-  await audit(adminTelegramId, 'booking.cancel', { bookingId, kind: row.kind, title: row.title })
-  console.info('[bot] booking cancelled', { bookingId, by: adminTelegramId })
-  return { ok: true }
-}
-
-/** Ручная корректировка числа записавшихся (админ видит реальную явку). */
-async function shiftSeats(sessionId: string, delta: number, adminTelegramId: number): Promise<Result> {
-  if (!sessionId) return { ok: false, message: 'Занятие не найдено' }
-  const sql = getDb()
-
-  const updated = (await sql`
-    update training_sessions
-    set seats_taken = least(greatest(seats_taken + ${delta}, 0), seats_total)
-    where id = ${sessionId}
-    returning seats_taken as taken, seats_total as total, title
-  `) as unknown as { taken: number; total: number; title: string }[]
-
-  const row = updated[0]
-  if (!row) return { ok: false, message: 'Занятие не найдено' }
-
-  await audit(adminTelegramId, 'session.seats', { sessionId, delta, taken: row.taken })
-  return { ok: true }
-}
-
-async function markIssued(orderId: string, adminTelegramId: number): Promise<Result> {
-  if (!orderId) return { ok: false, message: 'Заказ не найден' }
-  const sql = getDb()
-
-  const updated = (await sql`
-    update orders set status = 'issued'
-    where id = ${orderId} and status = 'reserved'
-    returning id, price
-  `) as unknown as { id: string; price: number }[]
-
-  if (!updated[0]) return { ok: false, message: 'Заказ уже выдан' }
-
-  await audit(adminTelegramId, 'order.issued', { orderId, price: updated[0].price })
-  const [buyer] = (await sql`
-    select u.telegram_id as "telegramId", p.title
-    from orders o join users u on u.id = o.user_id join products p on p.id = o.product_id
-    where o.id = ${orderId}
-  `) as unknown as { telegramId: number; title: string }[]
-
-  if (buyer) {
-    // Покупателю — короткое уведомление, что заказ готов.
-    await sendMessage(buyer.telegramId, `Заказ готов к выдаче: <b>${buyer.title}</b>. Ждём на ресепшене.`)
-  }
-  return { ok: true }
-}
-
-function appUrl(): string {
-  return process.env.VITE_APP_URL ?? 'https://mini-seven-xi.vercel.app'
 }
 
 /**
