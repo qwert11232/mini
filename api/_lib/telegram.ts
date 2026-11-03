@@ -71,6 +71,37 @@ export async function verifyInitData(initData: string, maxAgeSeconds = 600): Pro
   }
 }
 
+/**
+ * Гостевая сессия для браузера вне Telegram: подписи нет, поэтому опознаём
+ * устройство по случайному ключу из localStorage (заголовок X-DT-Device).
+ * Это не аутентификация личности, а метка «этот же браузер» — она нужна, чтобы
+ * записи с сайта доезжали до админки и не смешивались с чужими.
+ */
+const GUEST_ID_OFFSET = 900_000_000
+
+export class GuestSession implements TelegramUser {
+  readonly id: number
+  readonly firstName = 'Гость с сайта'
+  readonly lastName = null
+  readonly username = null
+
+  constructor(readonly deviceKey: string) {
+    // Стабильный псевдо-Telegram-ID: один браузер — одна карточка в базе.
+    let hash = 0
+    for (let i = 0; i < deviceKey.length; i += 1) {
+      hash = (hash * 31 + deviceKey.charCodeAt(i)) % 100_000_000
+    }
+    this.id = GUEST_ID_OFFSET + hash
+  }
+}
+
+/** Ключ устройства: 8–64 символа из безопасного алфавита. */
+export function readGuestSession(request: Request): GuestSession | null {
+  const key = request.headers.get('x-dt-device')
+  if (!key || !/^[A-Za-z0-9_-]{8,64}$/.test(key)) return null
+  return new GuestSession(key)
+}
+
 /** Тело запроса: либо initData (prod), либо dev-user (только локальный предпросмотр). */
 export async function resolveUser(request: Request): Promise<TelegramUser | null> {
   const auth = request.headers.get('authorization')

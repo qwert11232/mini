@@ -37,6 +37,8 @@ export type Update = {
     from?: TelegramUser
     chat: { id: number; type: string }
     text?: string
+    photo?: { file_id: string; file_unique_id: string; width: number; height: number; file_size?: number }[]
+    caption?: string
   }
   callback_query?: {
     id: string
@@ -52,7 +54,7 @@ function token(): string {
   return value
 }
 
-async function call<T>(method: string, payload: Record<string, unknown>): Promise<T | null> {
+export async function call<T>(method: string, payload: Record<string, unknown>): Promise<T | null> {
   const response = await fetch(`https://api.telegram.org/bot${token()}/${method}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -132,6 +134,14 @@ export async function setWebhook(url: string, secret: string | null): Promise<bo
 
 export async function getWebhookInfo(): Promise<unknown> {
   return call('getWebhookInfo', {})
+}
+
+/** Ссылка на файл: нужна только серверу — наружу её не отдаём, в ней токен бота. */
+export async function getFileUrl(fileId: string): Promise<string | null> {
+  const file = await call<{ file_path?: string }>('getFile', { file_id: fileId })
+  const path = file?.file_path
+  if (!path) return null
+  return `https://api.telegram.org/file/bot${token()}/${path}`
 }
 
 export async function setMyCommands(commands: { command: string; description: string }[]): Promise<void> {

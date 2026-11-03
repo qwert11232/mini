@@ -1,4 +1,5 @@
 import { getDb, money } from './db.js'
+import * as catalog from './catalog-admin.js'
 import type { Keyboard } from './telegram.js'
 import {
   auditLine,
@@ -193,7 +194,7 @@ export async function sessionsScreen(offset: number): Promise<Screen> {
   const buttons = rows.slice(0, 6).map((row) => [
     { text: `+1 место · ${row.start}`, callback_data: `seatplus:${row.id}` },
     { text: `−1 место · ${row.start}`, callback_data: `seats:${row.id}` },
-    { text: '🏷', callback_data: `sessprice:${row.id}` },
+    { text: `✏️ ${row.start}`, callback_data: `sescard:${row.id}` },
   ])
 
   return {
@@ -210,6 +211,7 @@ function sessionNavigation(offset: number): Keyboard {
         { text: 'Обновить', callback_data: `sessions:${offset}` },
         { text: '›', callback_data: `sessions:${offset + 1}` },
       ],
+      [{ text: '＋ Добавить занятие', callback_data: 'sesnue' }],
       [
         { text: '🎾 Свободная игра', callback_data: 'slots:0' },
         { text: '‹ Меню', callback_data: 'menu' },
@@ -269,6 +271,7 @@ export async function slotsScreen(offset: number): Promise<Screen> {
     ].join('\n'),
     keyboard: {
       inline_keyboard: [
+        [{ text: '＋ Добавить окно', callback_data: 'slotnue' }],
         ...buttons,
         ...restore,
         [
@@ -459,11 +462,12 @@ export async function helpScreen(): Promise<Screen> {
       '<b>Как пользоваться панелью</b>',
       '',
       '📅 <b>Сегодня / Завтра</b> — записи дня. У каждой две кнопки: отметить посещение или отменить (место вернётся в продажу).',
-      '🕘 <b>Расписание</b> — занятия по дням, заполненность и правка числа мест (+1 / −1).',
-      '🎾 <b>Свободная игра</b> — окна аренды: закрыть корт под телефонную бронь или вернуть окно в продажу.',
+      '🕘 <b>Расписание</b> — занятия по дням. «＋ Добавить занятие»: название, время, цена, места, формат, тренер, корт и повтор на несколько дней. По кнопке ✏️ у занятия — цена, время, места, снятие с продажи и удаление.',
+      '🎾 <b>Свободная игра</b> — окна аренды: «＋ Добавить окно» создаёт окна на неделю вперёд; окно можно закрыть под телефонную бронь или удалить.',
       '🛍 <b>Заказы</b> — резервы из магазина: «Выдать» закрывает заказ и уведомляет покупателя.',
       '👥 <b>Игроки</b> — заметка о клиенте и роль (игрок / тренер / админ).',
-      '🏟 <b>Корты</b> — загрузка на неделю. 📦 <b>Товары</b> — что видно в витрине.',
+      '🏟 <b>Корты</b> — загрузка на неделю.',
+      '📦 <b>Товары</b> — вся витрина: «＋ Новый товар» (название, цена, категория, описание, фото) и правка любого товара. Фото присылается картинкой прямо в чат. Всё, что вы меняете, сразу видно на сайте.',
       '🧾 <b>Журнал</b> — кто и что менял.',
       '',
       'У каждой карточки внизу есть «‹ Меню».',
@@ -511,3 +515,277 @@ export async function priceHint(sessionId: string): Promise<Screen> {
 }
 
 export { places }
+
+// ─── Управление витриной: товары ────────────────────────────────────────────
+
+export type ProductDraft = {
+  title?: string
+  subtitle?: string
+  category?: string
+  price?: number
+  photoRequested?: boolean
+}
+
+export async function productListScreen(): Promise<Screen> {
+  const rows = await catalog.products()
+  if (rows.length === 0) {
+    return {
+      text: '<b>Товары</b>\n\nКаталог пуст — добавьте первый товар.',
+      keyboard: { inline_keyboard: [[{ text: '＋ Новый товар', callback_data: 'prodnue' }], ...backMenu().inline_keyboard] },
+    }
+  }
+
+  const active = rows.filter((row) => row.isActive).length
+  return {
+    text: [
+      '<b>Витрина магазина</b>',
+      '',
+      `На сайте: <b>${active}</b> из ${rows.length}`,
+      '📷 — у товара есть фото. Нажмите на товар, чтобы изменить.',
+      '',
+      ...rows.map(catalog.productTitle),
+    ].join('\n'),
+    keyboard: {
+      inline_keyboard: [
+        ...rows.slice(0, 8).map((row) => [
+          { text: `${row.isActive ? '🟢' : '⚪️'} ${row.title.slice(0, 26)}`, callback_data: `prodedit:${row.id}` },
+        ]),
+        [{ text: '＋ Новый товар', callback_data: 'prodnue' }],
+        ...backMenu().inline_keyboard,
+      ],
+    },
+  }
+}
+
+export async function productCardScreen(id: string): Promise<Screen> {
+  const item = await catalog.product(id)
+  if (!item) return { text: 'Товар не найден.', keyboard: backMenu() }
+
+  return {
+    text: [
+      `<b>${escapeHtml(item.title)}</b>`,
+      '',
+      `Категория: ${escapeHtml(item.category)}`,
+      `Цена: <b>${money(item.price)}</b>${item.oldPrice ? ` (было ${money(item.oldPrice)})` : ''}`,
+      item.subtitle ? `Описание: ${escapeHtml(item.subtitle)}` : 'Описание: —',
+      `Фото: ${item.image ? 'есть' : 'нет'} · На сайте: ${item.isActive ? 'да' : 'скрыт'}`,
+      '',
+      'Меняйте кнопками ниже. Фото — просто отправьте картинку в этот чат.',
+    ].join('\n'),
+    keyboard: {
+      inline_keyboard: [
+        [
+          { text: '💰 Цена', callback_data: `prodprice:${item.id}` },
+          { text: '🏷 Категория', callback_data: `prodcat:${item.id}` },
+        ],
+        [
+          { text: '✏️ Название', callback_data: `prodtitle:${item.id}` },
+          { text: '📝 Описание', callback_data: `prodsub:${item.id}` },
+        ],
+        [
+          { text: '📷 Фото', callback_data: `prodphoto:${item.id}` },
+          { text: item.isActive ? '⚪️ Скрыть' : '🟢 Показать', callback_data: `prodtoggle:${item.id}` },
+        ],
+        [{ text: '🗑 Удалить', callback_data: `proddel:${item.id}` }],
+        [{ text: '‹ Товары', callback_data: 'products' }],
+      ],
+    },
+  }
+}
+
+/** Шаг конструктора: спрашиваем одно поле за раз. */
+export function productFieldScreen(hint: string): Screen {
+  return {
+    text: `<b>${escapeHtml(hint)}</b>\n\nПришлите значение одним сообщением. Отмена — кнопка ниже.`,
+    keyboard: { inline_keyboard: [[{ text: '‹ Отмена', callback_data: 'products' }]] },
+  }
+}
+
+export function newProductScreen(draft: ProductDraft): Screen {
+  const ready = Boolean(draft.title && draft.price !== undefined && draft.category)
+  return {
+    text: [
+      '<b>Новый товар</b>',
+      '',
+      `Название: ${draft.title ? escapeHtml(draft.title) : '—'}`,
+      `Цена: ${draft.price !== undefined ? money(draft.price) : '—'}`,
+      `Категория: ${draft.category ?? '—'}`,
+      `Описание: ${draft.subtitle ? escapeHtml(draft.subtitle) : '—'}`,
+      `Фото: ${draft.photoRequested ? 'будет добавлено' : 'нет'}`,
+      '',
+      ready ? 'Всё готово — нажмите «Сохранить».' : 'Заполните название, цену и категорию.',
+    ].join('\n'),
+    keyboard: {
+      inline_keyboard: [
+        [{ text: '✏️ Название', callback_data: 'newname' }, { text: '💰 Цена', callback_data: 'newprice' }],
+        [
+          { text: '🏷 Категория', callback_data: 'newcat' },
+          { text: '📝 Описание', callback_data: 'newsub' },
+        ],
+        [{ text: '📷 Фото', callback_data: 'newphoto' }],
+        ready
+          ? [{ text: '✅ Сохранить и показать на сайте', callback_data: 'newsave' }]
+          : [{ text: '— заполните поля —', callback_data: 'newnothing' }],
+        [{ text: '‹ Товары', callback_data: 'products' }],
+      ],
+    },
+  }
+}
+
+export function categoryPickScreen(prefix: string): Screen {
+  return {
+    text: '<b>Категория</b>\n\nВыберите раздел витрины.',
+    keyboard: {
+      inline_keyboard: [
+        ...catalog.CATEGORIES.map((category, index) => [{ text: category, callback_data: `${prefix}:${index}` }]),
+        [{ text: '‹ Назад', callback_data: 'products' }],
+      ],
+    },
+  }
+}
+
+// ─── Расписание: конструктор ────────────────────────────────────────────────
+
+export type SessionBuildDraft = {
+  title?: string
+  time?: string
+  durationMin?: number
+  price?: number
+  seats?: number
+  days?: number
+  groupIndex?: number
+  levelIndex?: number
+  coachId?: string
+  courtId?: string
+}
+
+export function sessionBuilderScreen(
+  draft: SessionBuildDraft,
+  coaches: { id: string; name: string }[],
+  courts: { id: string; name: string }[],
+): Screen {
+  const group = draft.groupIndex !== undefined ? catalog.GROUPS[draft.groupIndex] : '—'
+  const level = draft.levelIndex !== undefined ? catalog.LEVELS[draft.levelIndex] : '—'
+  const ready = Boolean(
+    draft.title &&
+      draft.time &&
+      draft.groupIndex !== undefined &&
+      draft.levelIndex !== undefined &&
+      draft.coachId &&
+      draft.courtId &&
+      draft.price !== undefined &&
+      draft.seats,
+  )
+
+  return {
+    text: [
+      '<b>Новое занятие в расписании</b>',
+      '',
+      `Название: ${draft.title ? escapeHtml(draft.title) : '—'}`,
+      `Формат: ${group} · уровень: ${level}`,
+      `Время: ${draft.time ?? '—'} · ${draft.durationMin ?? 60} мин`,
+      `Цена: ${draft.price !== undefined ? money(draft.price) : '—'} · мест: ${draft.seats ?? '—'}`,
+      `Тренер: ${coaches.find((c) => c.id === draft.coachId)?.name ?? '—'}`,
+      `Корт: ${courts.find((c) => c.id === draft.courtId)?.name ?? '—'}`,
+      `Повтор: ${draft.days ?? 1} дн.`,
+      '',
+      ready ? 'Готово — сохраняйте, занятие сразу появится на сайте.' : 'Заполните все поля.',
+    ].join('\n'),
+    keyboard: {
+      inline_keyboard: [
+        [{ text: '✏️ Название', callback_data: 'sesname' }, { text: '🕘 Время', callback_data: 'sestime' }],
+        [{ text: '💰 Цена', callback_data: 'sesprice' }, { text: '🪑 Мест', callback_data: 'sesseats' }],
+        [{ text: '📚 Формат', callback_data: 'sesgroup' }, { text: '🎚 Уровень', callback_data: 'seslevel' }],
+        coaches.slice(0, 4).map((coach) => ({
+          text: `${draft.coachId === coach.id ? '✓ ' : ''}${coach.name.split(' ')[0]}`,
+          callback_data: `sescoach:${coach.id}`,
+        })),
+        courts.slice(0, 4).map((court) => ({
+          text: `${draft.courtId === court.id ? '✓ ' : ''}${court.name}`,
+          callback_data: `sescourt:${court.id}`,
+        })),
+        [
+          { text: `Повтор: ${draft.days ?? 1} дн.`, callback_data: 'sesdays' },
+          { text: '⏱ Длительность', callback_data: 'sesdur' },
+        ],
+        ready
+          ? [{ text: '✅ Сохранить занятие', callback_data: 'sessave' }]
+          : [{ text: '— заполните поля —', callback_data: 'sesnothing' }],
+        [{ text: '‹ Расписание', callback_data: 'sessions:0' }],
+      ],
+    },
+  }
+}
+
+export function sessionCardScreen(row: {
+  id: string
+  title: string
+  start: string
+  dayOffset: number
+  seatsTotal: number
+  seatsTaken: number
+  price: number
+  active: boolean
+}): Screen {
+  return {
+    text: [
+      `<b>${escapeHtml(row.title)}</b>`,
+      '',
+      `${sessionDate(row.dayOffset)} · ${row.start}`,
+      `Мест: ${row.seatsTaken}/${row.seatsTotal} · ${money(row.price)}`,
+      `На сайте: ${row.active ? 'показывается' : 'снято с продажи'}`,
+    ].join('\n'),
+    keyboard: {
+      inline_keyboard: [
+        [
+          { text: '💰 Цена', callback_data: `sessprice2:${row.id}` },
+          { text: '🕘 Время', callback_data: `sestime2:${row.id}` },
+        ],
+        [
+          { text: '🪑 Мест', callback_data: `sesseats2:${row.id}` },
+          { text: row.active ? '⚪️ Снять' : '🟢 Вернуть', callback_data: `sestoggle:${row.id}` },
+        ],
+        [{ text: '🗑 Удалить', callback_data: `sesdel:${row.id}` }],
+        [{ text: '‹ Расписание', callback_data: 'sessions:0' }],
+      ],
+    },
+  }
+}
+
+export function slotBuilderScreen(
+  draft: { time?: string; price?: number; days?: number; courtId?: string },
+  courts: { id: string; name: string }[],
+): Screen {
+  const ready = Boolean(draft.time && draft.price !== undefined && draft.courtId)
+  return {
+    text: [
+      '<b>Новое окно свободной игры</b>',
+      '',
+      `Время: ${draft.time ?? '—'}`,
+      `Цена: ${draft.price !== undefined ? money(draft.price) : '—'}`,
+      `Корт: ${courts.find((c) => c.id === draft.courtId)?.name ?? '—'}`,
+      `Повтор: ${draft.days ?? 1} дн.`,
+      '',
+      ready ? 'Готово — окно появится в приложении.' : 'Заполните время, цену и корт.',
+    ].join('\n'),
+    keyboard: {
+      inline_keyboard: [
+        courts.slice(0, 4).map((court) => ({
+          text: `${draft.courtId === court.id ? '✓ ' : ''}${court.name}`,
+          callback_data: `slotcourt:${court.id}`,
+        })),
+        [
+          { text: '🕘 Время', callback_data: 'slottime' },
+          { text: '💰 Цена', callback_data: 'slotprice' },
+        ],
+        [{ text: `Повтор: ${draft.days ?? 1} дн.`, callback_data: 'slotdays' }],
+        ready
+          ? [{ text: '✅ Создать окна', callback_data: 'slotsave' }]
+          : [{ text: '— заполните поля —', callback_data: 'slotnothing' }],
+        [{ text: '‹ Свободная игра', callback_data: 'slots:0' }],
+      ],
+    },
+  }
+}
+
+export { catalog }

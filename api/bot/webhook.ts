@@ -24,6 +24,7 @@ import {
   setSessionPrice,
   type Result,
 } from './_lib/admin.js'
+import * as catalog from './_lib/catalog-admin.js'
 import {
   appUrl,
   auditScreen,
@@ -32,9 +33,18 @@ import {
   dbErrorScreen,
   helpScreen,
   menuScreen,
+  categoryPickScreen,
+  newProductScreen,
   ordersScreen,
   priceHint,
-  productsScreen,
+  productCardScreen,
+  productFieldScreen,
+  productListScreen,
+  sessionBuilderScreen,
+  sessionCardScreen,
+  slotBuilderScreen,
+  type ProductDraft,
+  type SessionBuildDraft,
   sessionsScreen,
   slotsScreen,
   usersScreen,
@@ -56,10 +66,21 @@ const HELP = [
   'Записаться на занятие и арендовать корт можно в приложении.',
 ].join('\n')
 
-/** Состояние диалога: админ присылает цену или заметку текстом. */
+/** Состояние диалога: админ присылает значение текстом или фото. */
 type Pending =
   | { kind: 'price'; sessionId: string }
   | { kind: 'note'; playerId: string }
+  | { kind: 'sessionField'; field: 'price' | 'time' | 'seats' | 'duration'; sessionId: string }
+  | { kind: 'productField'; field: 'title' | 'subtitle' | 'price'; productId: string }
+  | { kind: 'newProductField'; field: 'title' | 'subtitle' | 'price' }
+  | { kind: 'newSessionField'; field: 'title' | 'time' | 'price' | 'seats' | 'duration' | 'days' }
+  | { kind: 'newSlotField'; field: 'time' | 'price' | 'days' }
+  | { kind: 'productPhoto'; productId: string }
+
+/** Черновики конструкторов живут в памяти инстанса: один админ — один чат. */
+const productDraft = new Map<number, ProductDraft>()
+const sessionDraft = new Map<number, SessionBuildDraft>()
+const slotDraft = new Map<number, { time?: string; price?: number; days?: number; courtId?: string }>()
 
 const pending = new Map<number, Pending>()
 
@@ -90,7 +111,8 @@ async function handler(request: Request): Promise<Response> {
   try {
     if (update.callback_query) {
       await safe(update.callback_query.from.id, () => handleCallback(update))
-    } else if (update.message?.text) {
+    } else if (update.message) {
+      // Не только текст: админ присылает фото товара, у такого сообщения нет text.
       await safe(update.message.from?.id, () => handleMessage(update))
     }
   } catch (error) {
@@ -124,22 +146,29 @@ async function handleMessage(update: Update): Promise<void> {
   const from = message?.from
   if (!message || !from) return
 
+  // Фото от админа: обложка товара (в карточке товара или в конструкторе).
+  const photo = message.photo?.[message.photo.length - 1]
+  if (photo && isAdmin(from.id, from.username)) {
+    const waiting = pending.get(message.chat.id)
+    pending.delete(message.chat.id)
+    const target = waiting?.kind === 'productPhoto' ? waiting.productId : null
+    if (target) {
+      const result = await catalog.setProductPhoto(target, photo, from.id)
+      await answer(message.chat.id, result, await productCardScreen(target))
+      return
+    }
+    await sendMessage(message.chat.id, 'Фото получено, но не выбрано, куда его поставить. Откройте товар → «📷 Фото».')
+    return
+  }
+
   const chatId = message.chat.id
   const admin = isAdmin(from.id, from.username)
   const text = (message.text ?? '').trim()
   const command = text.split(/\s+/)[0]?.replace(/@.*$/, '').toLowerCase() ?? ''
 
-  // Текстовый ввод: цена занятия или заметка об игроке.
+  // Текстовый ввод от админа: цена, заметка, поля товара или занятия.
   const waiting = pending.get(chatId)
-  if (waiting && admin && !text.startsWith('/')) {
-    pending.delete(chatId)
-    const result =
-      waiting.kind === 'price'
-        ? await setSessionPrice(waiting.sessionId, Number(text.replace(/[^\d]/g, '')), from.id)
-        : await saveNote(waiting.playerId, text)
-    await answer(chatId, result, waiting.kind === 'price' ? await sessionsScreen(0) : await usersScreen())
-    return
-  }
+  if (waiting && admin && (await handleText(chatId, from.id, waiting, text))) return
 
   if (command === '/start') {
     if (admin) {
@@ -182,6 +211,96 @@ async function handleMessage(update: Update): Promise<void> {
       break
     default:
       await render(chatId, await menuScreen())
+  }
+}
+
+/**
+ * Текстовый ввод админа. Возвращает true, если сообщение было ответом на вопрос
+ * конструктора и обрабатывать его как команду не нужно.
+ */
+async function handleText(chatId: number, adminId: number, waiting: Pending, text: string): Promise<boolean> {
+  if (text.startsWith('/')) {
+    pending.delete(chatId)
+    return false
+  }
+
+  const digits = Number(text.replace(/[^\d]/g, ''))
+
+  switch (waiting.kind) {
+    case 'price': {
+      pending.delete(chatId)
+      await answer(chatId, await setSessionPrice(waiting.sessionId, digits, adminId), await sessionsScreen(0))
+      return true
+    }
+    case 'note': {
+      pending.delete(chatId)
+      await answer(chatId, await saveNote(waiting.playerId, text), await usersScreen())
+      return true
+    }
+    case 'sessionField': {
+      pending.delete(chatId)
+      const patch =
+        waiting.field === 'price'
+          ? { price: digits }
+          : waiting.field === 'time'
+            ? { start: text.trim() }
+            : waiting.field === 'seats'
+              ? { seatsTotal: digits }
+              : { durationMin: digits }
+      await answer(chatId, await catalog.updateSession(waiting.sessionId, patch, adminId), await sessionsScreen(0))
+      return true
+    }
+    case 'productField': {
+      pending.delete(chatId)
+      const patch =
+        waiting.field === 'price'
+          ? { price: digits }
+          : waiting.field === 'title'
+            ? { title: text }
+            : { subtitle: text }
+      await answer(
+        chatId,
+        await catalog.updateProduct(waiting.productId, patch, adminId),
+        await productCardScreen(waiting.productId),
+      )
+      return true
+    }
+    case 'newProductField': {
+      pending.delete(chatId)
+      const draft = productDraft.get(chatId) ?? {}
+      if (waiting.field === 'title') draft.title = text.trim()
+      if (waiting.field === 'subtitle') draft.subtitle = text.trim()
+      if (waiting.field === 'price') draft.price = digits
+      productDraft.set(chatId, draft)
+      await render(chatId, newProductScreen(draft))
+      return true
+    }
+    case 'newSessionField': {
+      pending.delete(chatId)
+      const draft = sessionDraft.get(chatId) ?? {}
+      if (waiting.field === 'title') draft.title = text.trim()
+      if (waiting.field === 'time') draft.time = text.trim()
+      if (waiting.field === 'price') draft.price = digits
+      if (waiting.field === 'seats') draft.seats = digits
+      if (waiting.field === 'duration') draft.durationMin = digits
+      if (waiting.field === 'days') draft.days = Math.min(Math.max(digits, 1), 7)
+      sessionDraft.set(chatId, draft)
+      await render(chatId, sessionBuilderScreen(draft, await catalog.coaches(), await catalog.courts()))
+      return true
+    }
+    case 'newSlotField': {
+      pending.delete(chatId)
+      const draft = slotDraft.get(chatId) ?? {}
+      if (waiting.field === 'time') draft.time = text.trim()
+      if (waiting.field === 'price') draft.price = digits
+      if (waiting.field === 'days') draft.days = Math.min(Math.max(digits, 1), 7)
+      slotDraft.set(chatId, draft)
+      await render(chatId, slotBuilderScreen(draft, await catalog.courts()))
+      return true
+    }
+    default:
+      pending.delete(chatId)
+      return false
   }
 }
 
@@ -283,8 +402,354 @@ async function handleCallback(update: Update): Promise<void> {
 
     case 'products':
       await answerCallback(query.id)
-      await render(chatId, await productsScreen(), messageId)
+      await render(chatId, await productListScreen(), messageId)
       return
+
+    // ── Товары: карточка, поля, фото, создание ───────────────────────────
+    case 'prodedit':
+      await answerCallback(query.id)
+      await render(chatId, await productCardScreen(arg), messageId)
+      return
+
+    case 'prodprice':
+    case 'prodtitle':
+    case 'prodsub': {
+      await answerCallback(query.id)
+      const field = action === 'prodprice' ? 'price' : action === 'prodtitle' ? 'title' : 'subtitle'
+      pending.set(chatId, { kind: 'productField', productId: arg, field })
+      const hint =
+        field === 'price'
+          ? 'Новая цена товара — пришлите число'
+          : field === 'title'
+            ? 'Новое название товара'
+            : 'Новое описание товара'
+      await render(chatId, productFieldScreen(hint), messageId)
+      return
+    }
+
+    case 'prodcat': {
+      await answerCallback(query.id)
+      await render(chatId, categoryPickScreen(`prodcatset:${arg}`), messageId)
+      return
+    }
+
+    case 'prodcatset': {
+      const [productId = '', indexRaw = '0'] = arg.split(':')
+      const category = catalog.CATEGORIES[Number(indexRaw)]
+      if (!category) {
+        await answerCallback(query.id, 'Категория не найдена')
+        return
+      }
+      return change(() => catalog.updateProduct(productId, { category }, adminId), async () => productCardScreen(productId))
+    }
+
+    case 'prodphoto':
+      await answerCallback(query.id)
+      pending.set(chatId, { kind: 'productPhoto', productId: arg })
+      await editMessage(
+        chatId,
+        messageId,
+        '<b>Фото товара</b>\n\nПришлите картинку прямо в чат — она сразу появится на сайте.',
+        { inline_keyboard: [[{ text: '‹ Товар', callback_data: `prodedit:${arg}` }]] },
+      )
+      return
+
+    case 'prodtoggle':
+      return change(() => catalog.toggleProduct(arg, adminId), async () => productCardScreen(arg))
+
+    case 'proddel': {
+      const result = await catalog.deleteProduct(arg, adminId)
+      await answerCallback(query.id, result.message)
+      await render(chatId, await productListScreen(), messageId)
+      return
+    }
+
+    case 'prodnue':
+      await answerCallback(query.id)
+      productDraft.set(chatId, {})
+      await render(chatId, newProductScreen({}), messageId)
+      return
+
+    case 'newname':
+    case 'newprice':
+    case 'newsub': {
+      await answerCallback(query.id)
+      const field = action === 'newname' ? 'title' : action === 'newprice' ? 'price' : 'subtitle'
+      pending.set(chatId, { kind: 'newProductField', field })
+      const hint =
+        field === 'title'
+          ? 'Название товара'
+          : field === 'price'
+            ? 'Цена товара — число'
+            : 'Короткое описание (необязательно)'
+      await editMessage(chatId, messageId, `<b>${hint}</b>\n\nПришлите значение сообщением.`, {
+        inline_keyboard: [[{ text: '‹ Отмена', callback_data: 'prodnue' }]],
+      })
+      return
+    }
+
+    case 'newcat':
+      await answerCallback(query.id)
+      await render(chatId, categoryPickScreen('newcatset'), messageId)
+      return
+
+    case 'newcatset': {
+      const category = catalog.CATEGORIES[Number(arg)]
+      if (!category) {
+        await answerCallback(query.id, 'Категория не найдена')
+        return
+      }
+      const draft = productDraft.get(chatId) ?? {}
+      draft.category = category
+      productDraft.set(chatId, draft)
+      await answerCallback(query.id, category)
+      await render(chatId, newProductScreen(draft), messageId)
+      return
+    }
+
+    case 'newphoto':
+      await answerCallback(query.id)
+      pending.set(chatId, { kind: 'productPhoto', productId: '' })
+      await editMessage(
+        chatId,
+        messageId,
+        '<b>Фото товара</b>\n\nПришлите картинку в чат — она привяжется, когда вы сохраните товар.',
+        { inline_keyboard: [[{ text: '‹ К товару', callback_data: 'prodnue' }]] },
+      )
+      return
+
+    case 'newsave': {
+      const draft = productDraft.get(chatId)
+      if (!draft?.title || draft.price === undefined || !draft.category) {
+        await answerCallback(query.id, 'Заполните название, цену и категорию')
+        return
+      }
+      const result = await catalog.createProduct(
+        { title: draft.title, subtitle: draft.subtitle, category: draft.category, price: draft.price },
+        adminId,
+      )
+      if (result.ok && result.id) {
+        productDraft.delete(chatId)
+        await answerCallback(query.id, result.message)
+        await render(chatId, await productCardScreen(result.id), messageId)
+        return
+      }
+      await answerCallback(query.id, result.message)
+      return
+    }
+
+    case 'newnothing':
+      await answerCallback(query.id, 'Заполните название, цену и категорию')
+      return
+
+    // ── Расписание: конструктор и карточка занятия ───────────────────────
+    case 'sesnue':
+      await answerCallback(query.id)
+      sessionDraft.set(chatId, { days: 1, durationMin: 60 })
+      await render(chatId, sessionBuilderScreen({ days: 1, durationMin: 60 }, await catalog.coaches(), await catalog.courts()), messageId)
+      return
+
+    case 'sesname':
+    case 'sestime':
+    case 'sesprice':
+    case 'sesseats':
+    case 'sesdur':
+    case 'sesdays': {
+      await answerCallback(query.id)
+      const field =
+        action === 'sesname'
+          ? 'title'
+          : action === 'sestime'
+            ? 'time'
+            : action === 'sesprice'
+              ? 'price'
+              : action === 'sesseats'
+                ? 'seats'
+                : action === 'sesdur'
+                  ? 'duration'
+                  : 'days'
+      pending.set(chatId, { kind: 'newSessionField', field })
+      const hint =
+        field === 'title'
+          ? 'Название занятия'
+          : field === 'time'
+            ? 'Время начала, ЧЧ:ММ'
+            : field === 'price'
+              ? 'Цена занятия — число'
+              : field === 'seats'
+                ? 'Сколько мест в группе'
+                : field === 'duration'
+                  ? 'Длительность в минутах'
+                  : 'На сколько дней вперёд поставить (1–7)'
+      await editMessage(chatId, messageId, `<b>${hint}</b>\n\nПришлите значение сообщением.`, {
+        inline_keyboard: [[{ text: '‹ Отмена', callback_data: 'sessions:0' }]],
+      })
+      return
+    }
+
+    case 'sesgroup':
+    case 'seslevel': {
+      await answerCallback(query.id)
+      const isGroup = action === 'sesgroup'
+      const items: readonly string[] = isGroup ? catalog.GROUPS : catalog.LEVELS
+      await render(
+        chatId,
+        {
+          text: isGroup ? '<b>Формат занятия</b>' : '<b>Уровень группы</b>',
+          keyboard: {
+            inline_keyboard: [
+              ...items.map((item, index) => [
+                { text: item, callback_data: `${isGroup ? 'sesgroupset' : 'seslevelset'}:${index}` },
+              ]),
+              [{ text: '‹ Назад', callback_data: 'sessions:0' }],
+            ],
+          },
+        },
+        messageId,
+      )
+      return
+    }
+
+    case 'sesgroupset':
+    case 'seslevelset':
+    case 'sescoach':
+    case 'sescourt': {
+      const draft = sessionDraft.get(chatId) ?? {}
+      if (action === 'sesgroupset') draft.groupIndex = Number(arg)
+      if (action === 'seslevelset') draft.levelIndex = Number(arg)
+      if (action === 'sescoach') draft.coachId = arg
+      if (action === 'sescourt') draft.courtId = arg
+      sessionDraft.set(chatId, draft)
+      await answerCallback(query.id)
+      await render(chatId, sessionBuilderScreen(draft, await catalog.coaches(), await catalog.courts()), messageId)
+      return
+    }
+
+    case 'sessave': {
+      const draft = sessionDraft.get(chatId)
+      await answerCallback(query.id)
+      if (!draft) return
+      const result = await catalog.createSession(
+        {
+          title: String(draft.title ?? ''),
+          groupKind: catalog.GROUPS[draft.groupIndex ?? -1] ?? '',
+          level: catalog.LEVELS[draft.levelIndex ?? -1] ?? '',
+          coachId: String(draft.coachId ?? ''),
+          courtId: String(draft.courtId ?? ''),
+          start: String(draft.time ?? ''),
+          durationMin: Number(draft.durationMin ?? 60),
+          price: Number(draft.price ?? 0),
+          seatsTotal: Number(draft.seats ?? 0),
+          days: Number(draft.days ?? 1),
+        },
+        adminId,
+      )
+      if (result.ok) sessionDraft.delete(chatId)
+      await sendMessage(chatId, result.ok ? `Готово: ${result.message}` : `Не вышло: ${result.message}`)
+      await render(chatId, await sessionsScreen(0), messageId)
+      return
+    }
+
+    case 'sesnothing':
+      await answerCallback(query.id, 'Заполните все поля')
+      return
+
+    case 'sescard': {
+      await answerCallback(query.id)
+      const row = await catalog.sessionById(arg)
+      if (!row) {
+        await sendMessage(chatId, 'Занятие не найдено.')
+        return
+      }
+      await render(chatId, sessionCardScreen({ ...row, active: row.isActive }), messageId)
+      return
+    }
+
+    case 'sestoggle':
+      return change(() => catalog.toggleSession(arg, adminId), async () => sessionsScreen(0))
+
+    case 'sesdel':
+      return change(() => catalog.deleteSession(arg, adminId), async () => sessionsScreen(0))
+
+    case 'sessprice2':
+    case 'sestime2':
+    case 'sesseats2': {
+      await answerCallback(query.id)
+      pending.set(chatId, {
+        kind: 'sessionField',
+        sessionId: arg,
+        field: action === 'sessprice2' ? 'price' : action === 'sestime2' ? 'time' : 'seats',
+      })
+      await editMessage(
+        chatId,
+        messageId,
+        action === 'sessprice2'
+          ? '<b>Новая цена занятия</b>\n\nПришлите число.'
+          : action === 'sestime2'
+            ? '<b>Новое время занятия</b>\n\nПришлите ЧЧ:ММ.'
+            : '<b>Сколько мест</b>\n\nПришлите число.',
+        { inline_keyboard: [[{ text: '‹ Расписание', callback_data: 'sessions:0' }]] },
+      )
+      return
+    }
+
+    // ── Свободная игра: конструктор окон ─────────────────────────────────
+    case 'slotnue':
+      await answerCallback(query.id)
+      slotDraft.set(chatId, { days: 1 })
+      await render(chatId, slotBuilderScreen({ days: 1 }, await catalog.courts()), messageId)
+      return
+
+    case 'slottime':
+    case 'slotprice':
+    case 'slotdays': {
+      await answerCallback(query.id)
+      const field = action === 'slottime' ? 'time' : action === 'slotprice' ? 'price' : 'days'
+      pending.set(chatId, { kind: 'newSlotField', field })
+      const hint =
+        field === 'time'
+          ? 'Время начала окна, ЧЧ:ММ'
+          : field === 'price'
+            ? 'Цена аренды — число'
+            : 'На сколько дней вперёд (1–7)'
+      await editMessage(chatId, messageId, `<b>${hint}</b>\n\nПришлите значение сообщением.`, {
+        inline_keyboard: [[{ text: '‹ Отмена', callback_data: 'slots:0' }]],
+      })
+      return
+    }
+
+    case 'slotcourt': {
+      const draft = slotDraft.get(chatId) ?? {}
+      draft.courtId = arg
+      slotDraft.set(chatId, draft)
+      await answerCallback(query.id)
+      await render(chatId, slotBuilderScreen(draft, await catalog.courts()), messageId)
+      return
+    }
+
+    case 'slotsave': {
+      const draft = slotDraft.get(chatId)
+      await answerCallback(query.id)
+      if (!draft?.time || draft.price === undefined || !draft.courtId) {
+        await sendMessage(chatId, 'Заполните время, цену и корт.')
+        return
+      }
+      const result = await catalog.createSlots(
+        { courtId: draft.courtId, start: draft.time, durationMin: 60, price: draft.price, days: draft.days ?? 1 },
+        adminId,
+      )
+      if (result.ok) slotDraft.delete(chatId)
+      await sendMessage(chatId, result.ok ? `Готово: ${result.message}` : `Не вышло: ${result.message}`)
+      await render(chatId, await slotsScreen(0), messageId)
+      return
+    }
+
+    case 'slotnothing':
+      await answerCallback(query.id, 'Заполните время, цену и корт')
+      return
+
+    case 'slotdel':
+      return change(() => catalog.deleteSlot(arg, adminId), async () => slotsScreen(0))
 
     case 'audit':
       await answerCallback(query.id)
@@ -325,7 +790,7 @@ async function handleCallback(update: Update): Promise<void> {
       return change(() => restoreBooking(arg, adminId), async () => dayScreen(0))
 
     case 'prodtoggle':
-      return change(() => toggleProduct(arg, adminId), async () => productsScreen())
+      return change(() => toggleProduct(arg, adminId), async () => productListScreen())
 
     case 'note':
       await answerCallback(query.id)
