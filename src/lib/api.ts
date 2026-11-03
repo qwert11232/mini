@@ -1,4 +1,4 @@
-import type { Booking, Coach, Court, FreeSlot, Order, Product, TrainingSession } from './types'
+import type { Booking, ClientProfile, Coach, Court, FreeSlot, Order, OrderContact, Product, TrainingSession } from './types'
 import { getTelegram } from './telegram'
 import { deviceKey } from './device'
 
@@ -71,10 +71,16 @@ export const api = {
     request<{ id: string }>('/api/bookings', { method: 'POST', body: JSON.stringify(draft) }),
   cancelBooking: (id: string) =>
     request<{ ok: boolean }>(`/api/bookings?id=${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  orders: () => request<{ orders: Order[] }>('/api/orders'),
-  createOrder: (productId: string, quantity: number) =>
-    request<{ id: string; price: number }>('/api/orders', {
+  client: () => request<ClientProfile>('/api/client'),
+  saveClient: (contact: OrderContact) =>
+    request<ClientProfile & { ok: boolean }>('/api/client', {
       method: 'POST',
-      body: JSON.stringify({ productId, quantity }),
+      body: JSON.stringify(contact),
+    }),
+  orders: () => request<{ orders: Order[] }>('/api/orders'),
+  createOrder: (productId: string, quantity: number, contact: OrderContact) =>
+    request<{ id: string; price: number; clientNo: number; clientLabel: string; contactName: string; contactPhone: string }>('/api/orders', {
+      method: 'POST',
+      body: JSON.stringify({ productId, quantity, ...contact }),
     }),
 }

@@ -5,6 +5,7 @@ import { BookingSheet } from './components/BookingSheet'
 import { ProductSheet } from './components/ProductSheet'
 import { CustomTrainingSheet } from './components/CustomTrainingSheet'
 import { OrdersSheet } from './components/OrdersSheet'
+import { OrderContactSheet } from './components/OrderContactSheet'
 import { HomeScreen } from './screens/HomeScreen'
 import { ScheduleScreen } from './screens/ScheduleScreen'
 import { PlayScreen } from './screens/PlayScreen'
@@ -13,7 +14,7 @@ import { AboutScreen } from './screens/AboutScreen'
 import { useStore } from './lib/store'
 import { useCatalog } from './lib/useCatalog'
 import { bookingFromSession, bookingFromSlot, type ActiveBooking } from './lib/booking'
-import type { SectionId } from './lib/types'
+import type { Product, SectionId } from './lib/types'
 import { haptic, initTelegram } from './lib/telegram'
 import { dayName, endTime } from './lib/date'
 import './styles/tokens.css'
@@ -24,6 +25,7 @@ export function App() {
   const [section, setSection] = useState<SectionId>('home')
   const [bookingTarget, setBookingTarget] = useState<ActiveBooking | null>(null)
   const [productId, setProductId] = useState<string | null>(null)
+  const [orderDraft, setOrderDraft] = useState<{ product: Product; quantity: number } | null>(null)
   const [customOpen, setCustomOpen] = useState(false)
   const [ordersOpen, setOrdersOpen] = useState(false)
   const store = useStore()
@@ -82,6 +84,9 @@ export function App() {
     () => catalog.products.find((product) => product.id === productId) ?? null,
     [catalog.products, productId],
   )
+  const savedContactName = store.client?.firstName && store.client.firstName !== 'Гость с сайта'
+    ? store.client.firstName
+    : ''
 
   return (
     <div className="app-shell">
@@ -112,6 +117,7 @@ export function App() {
           <AboutScreen
             bookings={store.bookings}
             coaches={catalog.coaches}
+            client={store.client}
             mode={store.mode}
             loading={store.loading}
             onRetry={store.retry}
@@ -134,15 +140,33 @@ export function App() {
         }}
         onOrder={(product, quantity) => {
           setProductId(null)
-          void store.order(product.id, quantity).then((result) => {
-            if (result.ok) {
-              haptic('success')
-              show('Заказ оформлен', `${product.title} · резерв 48 часов`)
-            } else {
-              haptic('error')
-              show('Заказ не оформлен', result.error)
-            }
-          })
+          setOrderDraft({ product, quantity })
+        }}
+      />
+
+      <OrderContactSheet
+        open={orderDraft !== null}
+        product={orderDraft?.product ?? null}
+        quantity={orderDraft?.quantity ?? 1}
+        clientLabel={store.client?.clientLabel}
+        initialName={savedContactName}
+        initialPhone={store.client?.phone}
+        onClose={() => setOrderDraft(null)}
+        onSubmit={async (contact) => {
+          const draft = orderDraft
+          if (!draft) return { ok: false, error: 'Заказ уже закрыт' }
+          const result = await store.order(draft.product.id, draft.quantity, contact, draft.product.title)
+          if (result.ok) {
+            setOrderDraft(null)
+            haptic('success')
+            show(
+              'Заказ оформлен',
+              `${draft.product.title} · ${result.clientLabel ? `клиент ${result.clientLabel}` : 'резерв 48 часов'}`,
+            )
+          } else {
+            haptic('error')
+          }
+          return result
         }}
       />
 

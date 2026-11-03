@@ -1,4 +1,5 @@
 import { getDb, money, type Result } from './db.js'
+import { ensureCustomerSchema } from '../../_lib/customers.js'
 import type { Keyboard } from './telegram.js'
 
 /**
@@ -99,15 +100,19 @@ export type PlayerRow = {
   username: string | null
   telegram_id: number
   role: string
+  clientNo: number | null
+  phone: string | null
   created: string
   cancelled: number
   lastSeen: string | null
 }
 
 export async function players(limit = 12): Promise<PlayerRow[]> {
+  await ensureCustomerSchema()
   const sql = getDb()
   const rows = (await sql`
     select u.id, u.first_name, u.username, u.telegram_id, u.role,
+           u.client_no as "clientNo", u.phone,
            to_char(u.created_at at time zone 'Europe/Moscow', 'DD.MM.YY') as created,
            (select count(*)::int from bookings b where b.user_id = u.id and b.status = 'cancelled') as cancelled,
            to_char(u.last_seen_at at time zone 'Europe/Moscow', 'DD.MM HH24:MI') as "lastSeen"

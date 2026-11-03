@@ -71,10 +71,27 @@ export type Booking = {
   createdAt: number
 }
 
+export type ClientProfile = {
+  clientNo: number
+  clientLabel: string
+  firstName: string
+  phone: string | null
+  hasPhone: boolean
+}
+
+export type OrderContact = {
+  name: string
+  phone: string
+}
+
 export type Order = {
   id: string
   productId: string
   title: string
   price: number
+  quantity?: number
   createdAt: number
+  contactName?: string
+  contactPhone?: string
+  clientNo?: number
 }
