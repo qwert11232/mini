@@ -126,6 +126,23 @@ export function readOptionalString(value: unknown, field: string, maxLength = 20
   return trimmed
 }
 
+/**
+ * Телефон приводим к международному виду: его удобно показать в боте и
+ * открыть через tel:. Российские номера принимаем и как 8…, и как +7… .
+ */
+export function normalizePhone(value: string): string {
+  if (/[A-Za-zА-Яа-яЁё]/.test(value)) {
+    throw new HttpError(400, 'В телефоне должны быть только цифры и знаки + ( ) -')
+  }
+  const digits = value.replace(/\D/g, '')
+  if (digits.length === 11 && (digits.startsWith('7') || digits.startsWith('8'))) {
+    return `+7${digits.slice(1)}`
+  }
+  if (digits.length === 10) return `+7${digits}`
+  if (digits.length >= 11 && digits.length <= 15) return `+${digits}`
+  throw new HttpError(400, 'Введите телефон с кодом города или страны (10–15 цифр)')
+}
+
 export function readString(value: unknown, field: string, maxLength = 200): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new HttpError(400, `Поле «${field}» обязательно`)

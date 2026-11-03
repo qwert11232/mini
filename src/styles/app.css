@@ -38,7 +38,12 @@
   transform: translateX(-50%);
   width: min(calc(100% - 24px), 456px);
   border-radius: var(--r-xl);
-  border: 1px solid rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  /* Почти непрозрачная подложка + сильное размытие: текст страницы под
+     плашкой не должен просвечивать и мешать читать разделы. */
+  background: rgba(250, 252, 249, 0.95);
+  backdrop-filter: blur(34px) saturate(190%);
+  -webkit-backdrop-filter: blur(34px) saturate(190%);
   box-shadow:
     0 18px 40px -18px rgba(5, 36, 23, 0.42),
     inset 0 0 0 1px rgba(22, 33, 26, 0.05);
@@ -1359,6 +1364,92 @@
   border-top: 1px solid var(--separator);
   background: var(--surface-solid);
   flex: none;
+}
+
+/* ── Контакты при заказе ──────────────────────────────────────────────────── */
+
+.contact-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: 12px;
+  border-radius: var(--r-md);
+  color: var(--green-800);
+  background: var(--green-50);
+}
+
+.contact-note-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--green-700);
+  background: var(--green-100);
+}
+
+.client-number-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 11px 13px;
+  border: 1px solid var(--separator);
+  border-radius: var(--r-md);
+  background: var(--clay-0);
+}
+
+.client-number-row strong {
+  color: var(--green-700);
+}
+
+.field {
+  display: grid;
+  gap: 7px;
+}
+
+.field-label {
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  color: var(--clay-700);
+}
+
+.text-input {
+  width: 100%;
+  min-height: 50px;
+  padding: 12px 14px;
+  border: 1px solid var(--separator-strong);
+  border-radius: var(--r-md);
+  outline: none;
+  color: var(--text);
+  background: var(--clay-0);
+  transition: border-color var(--dur-fast) linear, box-shadow var(--dur-fast) linear;
+}
+
+.text-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.text-input:focus {
+  border-color: var(--green-500);
+  box-shadow: 0 0 0 3px rgba(26, 131, 80, 0.13);
+}
+
+.form-error {
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-footnote);
+  color: var(--danger);
+  background: #faece9;
+}
+
+.contact-privacy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  text-align: center;
 }
 
 /* ── Тосты ────────────────────────────────────────────────────────────────── */

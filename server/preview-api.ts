@@ -103,6 +103,18 @@ export function previewApi(): Plugin {
           })
         }
 
+        if (route === '/client' && method === 'GET') {
+          return send(res, 200, { clientNo: 1, clientLabel: '№ 1', firstName: DEMO_USER.firstName, phone: null, hasPhone: false })
+        }
+
+        if (route === '/client' && method === 'POST') {
+          const body = await readBody(req)
+          const name = String(body.name ?? '').trim()
+          const phone = String(body.phone ?? '').trim()
+          if (!name || !phone) return send(res, 400, { error: 'Укажите имя и телефон' })
+          return send(res, 200, { ok: true, clientNo: 1, clientLabel: '№ 1', firstName: name, phone, hasPhone: true })
+        }
+
         if (route === '/me' && method === 'GET') {
           return send(res, 200, { user: DEMO_USER, hasBookings: store.bookings.length > 0 })
         }
@@ -171,6 +183,10 @@ export function previewApi(): Plugin {
           const product = store.products.find((item) => item.id === String(body.productId ?? ''))
           if (!product) return send(res, 404, { error: 'Товар недоступен' })
 
+          const name = String(body.name ?? '').trim()
+          const phone = String(body.phone ?? '').trim()
+          if (!name || !phone) return send(res, 400, { error: 'Укажите имя и телефон для заказа' })
+
           const quantity = Math.min(Math.max(Number(body.quantity ?? 1), 1), 9)
           const order = {
             id: `ord-${Date.now().toString(36)}`,
@@ -178,11 +194,21 @@ export function previewApi(): Plugin {
             title: product.title,
             price: Number(product.price) * quantity,
             quantity,
+            contactName: name,
+            contactPhone: phone,
+            clientNo: 1,
             createdAt: Date.now(),
           }
           store.orders.unshift(order)
           await saveStore(store)
-          return send(res, 201, { id: order.id, price: order.price })
+          return send(res, 201, {
+            id: order.id,
+            price: order.price,
+            clientNo: 1,
+            clientLabel: '№ 1',
+            contactName: name,
+            contactPhone: phone,
+          })
         }
 
         return send(res, 404, { error: 'Маршрут не найден' })

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { CLUB } from '../data/club'
-import type { Coach } from '../lib/types'
+import type { ClientProfile, Coach } from '../lib/types'
 import { ScreenHeader } from '../components/Chrome'
 import { BookingRow } from '../components/BookingRow'
 import {
@@ -48,13 +48,14 @@ const STATS = [
 type Props = {
   bookings: Booking[]
   coaches: Coach[]
+  client: ClientProfile | null
   mode: 'api' | 'demo'
   loading: boolean
   onRetry: () => void
   onCancelBooking: (id: string) => void
 }
 
-export function AboutScreen({ bookings, coaches: COACHES, mode, loading, onRetry, onCancelBooking }: Props) {
+export function AboutScreen({ bookings, coaches: COACHES, client, mode, loading, onRetry, onCancelBooking }: Props) {
   const [openFaq, setOpenFaq] = useState<number | null>(0)
 
   return (
@@ -188,6 +189,31 @@ export function AboutScreen({ bookings, coaches: COACHES, mode, loading, onRetry
             <span className="badge badge-green">Ответ до 15 минут</span>
           </div>
         </section>
+
+        {client ? (
+          <section className="stack gap-3">
+            <h2 className="t-title3">Ваш профиль</h2>
+            <div className="group">
+              <div className="group-row">
+                <span className="group-icon"><IconUsers size={17} /></span>
+                <span className="grow stack">
+                  <span className="t-subhead" style={{ fontWeight: 550 }}>Номер клиента: {client.clientLabel}</span>
+                  <span className="t-footnote">Назовите его на ресепшене — так мы быстро найдём ваши записи и заказы.</span>
+                </span>
+                <span className="badge badge-green">В базе</span>
+              </div>
+              <div className="group-row">
+                <span className="group-icon"><IconPhone size={17} /></span>
+                <span className="grow stack">
+                  <span className="t-subhead" style={{ fontWeight: 550 }}>{client.phone ?? 'Телефон пока не указан'}</span>
+                  <span className="t-footnote">
+                    {client.phone ? 'По нему администратор свяжется по вашему заказу.' : 'Имя и телефон можно оставить при оформлении заказа.'}
+                  </span>
+                </span>
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         <section className="stack gap-3">
           <h2 className="t-title3">Синхронизация</h2>

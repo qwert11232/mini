@@ -39,11 +39,13 @@ const calls = []
 // Фикстура занятия — на завтра: проверка не должна зависеть от текущего времени.
 window.fetch = async (url) => {
   calls.push(String(url))
-  const body = String(url).includes('/api/bookings')
-    ? { bookings: [], user: { firstName: 'Демо' } }
-    : String(url).includes('/api/catalog')
-      ? catalog
-      : { orders: [] }
+  const body = String(url).includes('/api/client')
+    ? { clientNo: 42, clientLabel: '№ 42', firstName: 'Демо', phone: null, hasPhone: false }
+    : String(url).includes('/api/bookings')
+      ? { bookings: [], user: { firstName: 'Демо' } }
+      : String(url).includes('/api/catalog')
+        ? catalog
+        : { orders: [] }
   return { ok: true, status: 200, json: async () => body }
 }
 
@@ -72,6 +74,7 @@ const checks = {
   'герой на месте': text.includes('уже готов'),
   'таб-бар: 5 разделов': ['Клуб', 'Занятия', 'Игра', 'Магазин', 'О нас'].every((t) => text.includes(t)),
   'каталог пришёл из /api': calls.some((url) => url.includes('/api/catalog')),
+  'профиль клиента запрошен': calls.some((url) => url.includes('/api/client')),
   'занятие из API на экране': text.includes('Группа · начальный уровень'),
   'тренер из API': text.includes('Артём Соколов'),
   'ошибок в консоли нет': errors.length === 0,

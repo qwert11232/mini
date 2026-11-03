@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api } from './api'
 import { COACHES, COURTS, FREE_SLOTS, PRODUCTS, SESSIONS } from '../data/club'
-import type { Booking, Order } from './types'
+import type { Booking, ClientProfile, Order, OrderContact } from './types'
 
 const MODE_KEY = 'dt.mode.v1'
 
@@ -13,10 +13,16 @@ export type Store = {
   loading: boolean
   bookings: Booking[]
   orders: Order[]
+  client: ClientProfile | null
   favorites: string[]
   book: (draft: Omit<Booking, 'id' | 'createdAt'>) => Promise<{ ok: boolean; error?: string }>
   cancelBooking: (id: string) => Promise<void>
-  order: (productId: string, quantity: number) => Promise<{ ok: boolean; error?: string }>
+  order: (
+    productId: string,
+    quantity: number,
+    contact: OrderContact,
+    productTitle?: string,
+  ) => Promise<{ ok: boolean; error?: string; clientLabel?: string }>
   toggleFavorite: (productId: string) => void
   retry: () => void
 }
@@ -51,6 +57,7 @@ export function useStore(): Store {
   const [loading, setLoading] = useState(mode === 'api')
   const [bookings, setBookings] = useState<Booking[]>(() => readLocal('dt.bookings.v1', []))
   const [orders, setOrders] = useState<Order[]>(() => readLocal('dt.orders.v1', []))
+  const [client, setClient] = useState<ClientProfile | null>(null)
   const [favorites, setFavorites] = useState<string[]>(() => readLocal('dt.favorites.v1', []))
   const [attempt, setAttempt] = useState(0)
   const mounted = useRef(true)
@@ -66,6 +73,17 @@ export function useStore(): Store {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
+
+    // Номер клиента подгружаем при входе на сайт, а не только после заказа.
+    // Ошибка профиля не должна переводить весь сайт в демо-режим.
+    api
+      .client()
+      .then((profile) => {
+        if (!cancelled && mounted.current && typeof profile.clientNo === 'number') setClient(profile)
+      })
+      .catch(() => {
+        // Профиль появится при повторной попытке или после оформления заказа.
+      })
 
     api
       .bookings()
@@ -145,24 +163,35 @@ export function useStore(): Store {
   )
 
   const order = useCallback(
-    async (productId: string, quantity: number) => {
+    async (productId: string, quantity: number, contact: OrderContact, productTitle?: string) => {
       if (mode === 'api') {
         try {
-          const created = await api.createOrder(productId, quantity)
+          const created = await api.createOrder(productId, quantity, contact)
           const product = PRODUCTS.find((item) => item.id === productId)
           if (mounted.current) {
             setOrders((prev) => [
               {
                 id: created.id,
                 productId,
-                title: product?.title ?? 'Товар',
+                title: productTitle ?? product?.title ?? 'Товар',
                 price: created.price,
+                quantity,
+                contactName: created.contactName,
+                contactPhone: created.contactPhone,
+                clientNo: created.clientNo,
                 createdAt: Date.now(),
               },
               ...prev,
             ])
+            setClient({
+              clientNo: created.clientNo,
+              clientLabel: created.clientLabel,
+              firstName: created.contactName,
+              phone: created.contactPhone,
+              hasPhone: true,
+            })
           }
-          return { ok: true }
+          return { ok: true, clientLabel: created.clientLabel }
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : 'Не удалось оформить' }
         }
@@ -173,8 +202,11 @@ export function useStore(): Store {
       const created: Order = {
         id: `ord-${Date.now().toString(36)}`,
         productId,
-        title: product.title,
+        title: productTitle ?? product.title,
         price: product.price * quantity,
+        quantity,
+        contactName: contact.name,
+        contactPhone: contact.phone,
         createdAt: Date.now(),
       }
       setOrders((prev) => [created, ...prev])
@@ -196,6 +228,7 @@ export function useStore(): Store {
     loading,
     bookings,
     orders,
+    client,
     favorites,
     book,
     cancelBooking,

@@ -16,6 +16,8 @@ create table if not exists users (
   username text,
   role text not null default 'player' check (role in ('player','coach','admin')),
   admin_note text,
+  phone text,
+  client_no integer,
   created_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now()
 );
@@ -114,12 +116,22 @@ create table if not exists orders (
   quantity int not null default 1,
   price int not null,
   status text not null default 'reserved' check (status in ('reserved','paid','issued','cancelled')),
+  contact_name text,
+  contact_phone text,
   created_at timestamptz not null default now()
 );
 
 alter table bookings alter column user_id drop not null;
 
 alter table users add column if not exists admin_note text;
+
+-- Контакты и постоянный номер клиента (те же миграции применяет api/_lib/customers.ts).
+alter table users add column if not exists phone text;
+alter table users add column if not exists client_no integer;
+create sequence if not exists users_client_no_seq;
+update users set client_no = nextval('users_client_no_seq') where client_no is null;
+alter table orders add column if not exists contact_name text;
+alter table orders add column if not exists contact_phone text;
 
 create index if not exists users_seen_idx on users (last_seen_at desc);
 

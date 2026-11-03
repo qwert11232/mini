@@ -1,4 +1,5 @@
 import { getDb, money } from './db.js'
+import { ensureCustomerSchema, formatClientNo } from '../../_lib/customers.js'
 import * as catalog from './catalog-admin.js'
 import type { Keyboard } from './telegram.js'
 import {
@@ -82,15 +83,18 @@ type DayRow = {
   start: string
   firstName: string | null
   username: string | null
+  clientNo: number | null
+  phone: string | null
   sourceId: string
 }
 
 export async function dayScreen(offset: number): Promise<Screen> {
+  await ensureCustomerSchema()
   const sql = getDb()
   const rows = (await sql`
     select b.id, b.kind, b.title, b.price, b.source_id as "sourceId",
            to_char(b.starts_at at time zone 'Europe/Moscow', 'HH24:MI') as start,
-           u.first_name as "firstName", u.username
+           u.first_name as "firstName", u.username, u.client_no as "clientNo", u.phone
     from bookings b
     left join users u on u.id = b.user_id
     where b.status = 'active' and b.starts_at::date = current_date + ${offset}::int
@@ -114,7 +118,8 @@ export async function dayScreen(offset: number): Promise<Screen> {
         : escapeHtml(row.firstName)
       : 'ресепшен'
     const kind = row.kind === 'free' ? 'аренда' : 'занятие'
-    return `${index + 1}. <b>${row.start}</b> · ${escapeHtml(row.title)}\n    ${kind} · ${who} · ${money(row.price)}`
+    const phone = row.phone ? ` · <a href="tel:${row.phone}">${row.phone}</a>` : ''
+    return `${index + 1}. <b>${row.start}</b> · ${escapeHtml(row.title)}\n    ${kind} · ${who} · ${formatClientNo(row.clientNo)}${phone} · ${money(row.price)}`
   })
 
   const buttons = rows.slice(0, 8).flatMap((row, index) => {
@@ -288,9 +293,12 @@ export async function slotsScreen(offset: number): Promise<Screen> {
 // ─── Заказы ─────────────────────────────────────────────────────────────────
 
 export async function ordersScreen(): Promise<Screen> {
+  await ensureCustomerSchema()
   const sql = getDb()
   const rows = (await sql`
     select o.id, o.price, o.quantity, p.title, u.first_name as "firstName", u.username,
+           u.client_no as "clientNo", u.phone,
+           o.contact_name as "contactName", o.contact_phone as "contactPhone",
            to_char(o.created_at at time zone 'Europe/Moscow', 'DD.MM HH24:MI') as created
     from orders o
     join users u on u.id = o.user_id
@@ -298,7 +306,19 @@ export async function ordersScreen(): Promise<Screen> {
     where o.status = 'reserved'
     order by o.created_at desc
     limit 20
-  `) as unknown as { id: string; price: number; quantity: number; title: string; firstName: string; username: string | null; created: string }[]
+  `) as unknown as {
+    id: string
+    price: number
+    quantity: number
+    title: string
+    firstName: string
+    username: string | null
+    clientNo: number | null
+    phone: string | null
+    contactName: string | null
+    contactPhone: string | null
+    created: string
+  }[]
 
   const [handed] = (await sql`
     select count(*)::int as count,
@@ -314,10 +334,14 @@ export async function ordersScreen(): Promise<Screen> {
     return { text: `${header}\n\nК выдаче ничего нет.`, keyboard: backMenu() }
   }
 
-  const lines = rows.map(
-    (row) =>
-      `• ${escapeHtml(row.title)} ×${row.quantity} · ${money(row.price)}\n   ${escapeHtml(row.firstName)}${row.username ? ` (@${row.username})` : ''} · ${row.created}`,
-  )
+  const lines = rows.map((row) => {
+    const name = row.contactName || row.firstName
+    const phone = row.contactPhone || row.phone
+    const phoneLine = phone
+      ? `📞 <a href="tel:${phone}">${phone}</a>`
+      : '📞 телефон не указан'
+    return `• ${escapeHtml(row.title)} ×${row.quantity} · ${money(row.price)}\n   ${formatClientNo(row.clientNo)} · ${escapeHtml(name)}${row.username ? ` (@${row.username})` : ''}\n   ${phoneLine} · ${row.created}`
+  })
 
   return {
     text: [header, '', ...lines].join('\n'),
@@ -348,7 +372,8 @@ export async function usersScreen(): Promise<Screen> {
       row.cancelled > 0 ? `${row.cancelled} отмен` : null,
     ].filter(Boolean)
     const tail = badges.length > 0 ? ` · ${badges.join(' · ')}` : ''
-    return `${index + 1}. ${who}${tail}\n    заходил ${row.lastSeen ?? '—'}`
+    const phone = row.phone ? `\n    📞 <a href="tel:${row.phone}">${row.phone}</a>` : ''
+    return `${index + 1}. ${who} · ${formatClientNo(row.clientNo)}${tail}\n    заходил ${row.lastSeen ?? '—'}${phone}`
   })
 
   const buttons = rows.slice(0, 6).map((row) => [
@@ -368,7 +393,9 @@ export function playerCard(row: PlayerRow): Screen {
     text: [
       `<b>${who}</b>`,
       '',
+      `Клиент: <b>${formatClientNo(row.clientNo)}</b>`,
       `Роль: ${row.role === 'admin' ? 'администратор' : row.role === 'coach' ? 'тренер' : 'игрок'}`,
+      row.phone ? `Телефон: <a href="tel:${row.phone}">${row.phone}</a>` : 'Телефон: не указан',
       `В базе с ${row.created} · заходил ${row.lastSeen ?? '—'}`,
       `Отменённых записей: ${row.cancelled}`,
     ].join('\n'),
