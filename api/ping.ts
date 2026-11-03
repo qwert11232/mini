@@ -1,4 +1,4 @@
-import { json } from './_lib/db.js'
+import { dbUrl, json } from './_lib/db.js'
 
 /**
  * GET /api/ping — минимальная проверка рантайма: без импорта Neon и без обращений к базе.
@@ -8,7 +8,8 @@ async function handler(): Promise<Response> {
   return json({
     ok: true,
     node: process.version,
-    hasDb: Boolean(process.env.DATABASE_URL),
+    hasDb: Boolean(dbUrl()),
+    dbFrom: dbUrl()?.from ?? null,
     hasBot: Boolean(process.env.TELEGRAM_BOT_TOKEN),
     time: new Date().toISOString(),
   })

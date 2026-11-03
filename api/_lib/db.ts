@@ -1,9 +1,10 @@
 import { neon } from '@neondatabase/serverless'
 
 /**
- * Строка подключения может лежать под разными именами: интеграция Neon в Vercel
- * исторически ставит DATABASE_URL, но встречаются POSTGRES_URL / NEON_DATABASE_URL.
- * Ищем по списку приоритетов, чтобы не гадать по имени переменной.
+ * Строка подключения может лежать под разными именами. Интеграция Neon в Vercel
+ * ставит свои переменные, а при подключении с «Custom Prefix» — ещё и с префиксом
+ * (у нас в проекте встречался `tennisapp_`). Поэтому сначала известные имена,
+ * затем — любая переменная, значение которой похоже на строку подключения.
  */
 const DB_URL_KEYS = [
   'DATABASE_URL',
@@ -11,21 +12,71 @@ const DB_URL_KEYS = [
   'NEON_DATABASE_URL',
   'DATABASE_URL_UNPOOLED',
   'POSTGRES_URL_NON_POOLING',
+  'POSTGRES_PRISMA_URL',
+  'POSTGRES_URL_NO_SSL',
 ] as const
+
+/** Имена, которые не могут быть строкой подключения, даже если содержат «URL». */
+const DB_URL_NOISE = /PASSWORD|_USER$|HOST|DATABASE$|NO_SSL|NON_SSL/i
+
+function looksLikeUrl(value: string | undefined): value is string {
+  return Boolean(value && /^postgres(ql)?:\/\//i.test(value.trim()))
+}
+
+/** Pooled-строка предпочтительнее: у Neon это хост с `-pooler`. */
+function rank(name: string, url: string): number {
+  if (/-pooler/.test(url)) return 0
+  if (/UNPOOLED|NON_POOLING/i.test(name)) return 2
+  return 1
+}
+
+/**
+ * У Prisma-строки в хвосте бывают `pgbouncer=true`, `connect_timeout`, `schema` —
+ * HTTP-драйверу Neon они не нужны и только мешают. Заодно гарантируем TLS.
+ */
+function normalizeDbUrl(url: string): string {
+  try {
+    const parsed = new URL(url.trim())
+    for (const key of ['pgbouncer', 'connect_timeout', 'schema', 'statement_cache_size', 'connection_limit']) {
+      parsed.searchParams.delete(key)
+    }
+    if (!parsed.searchParams.has('sslmode')) parsed.searchParams.set('sslmode', 'require')
+    return parsed.toString()
+  } catch {
+    return url.trim()
+  }
+}
 
 export function dbUrl(): { url: string; from: string } | null {
   for (const key of DB_URL_KEYS) {
     const value = process.env[key]
-    if (value) return { url: value, from: key }
+    if (looksLikeUrl(value)) return { url: normalizeDbUrl(value), from: key }
   }
-  return null
+
+  // Ни одно ожидаемое имя не подошло — ищем любую переменную с postgres-строкой
+  // (префикс интеграции, своё имя и т.п.).
+  const candidates = Object.entries(process.env)
+    .filter(([name, value]) => !DB_URL_NOISE.test(name) && looksLikeUrl(value))
+    .map(([name, value]) => ({ name, url: String(value) }))
+    .sort((a, b) => rank(a.name, a.url) - rank(b.name, b.url))
+
+  const best = candidates[0]
+  return best ? { url: normalizeDbUrl(best.url), from: best.name } : null
 }
 
-/** Какие из поддерживаемых имён реально заданы — для диагностики (без секретов). */
+/** Какие из ожидаемых имён содержат строку подключения — для диагностики (без значений). */
 export function dbUrlPresence(): Record<string, boolean> {
   const result: Record<string, boolean> = {}
-  for (const key of DB_URL_KEYS) result[key] = Boolean(process.env[key])
+  for (const key of DB_URL_KEYS) result[key] = looksLikeUrl(process.env[key])
   return result
+}
+
+/** Все имена переменных, где лежит postgres://… — только имена, без значений. */
+export function dbUrlCandidates(): string[] {
+  return Object.entries(process.env)
+    .filter(([name, value]) => !DB_URL_NOISE.test(name) && looksLikeUrl(value))
+    .map(([name]) => name)
+    .sort()
 }
 
 /**
