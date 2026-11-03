@@ -1,4 +1,4 @@
-import { dbUrlPresence, failure, getDb, json } from './_lib/db.js'
+import { dbUrl, dbUrlCandidates, dbUrlPresence, failure, getDb, json } from './_lib/db.js'
 import { getWebhookInfo } from './bot/_lib/telegram.js'
 
 /**
@@ -19,6 +19,7 @@ async function handler(request: Request): Promise<Response> {
     const base = {
       ok: true,
       build: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? 'local',
+      dbUrlFrom: dbUrl()?.from ?? null,
       db: db.database,
       dbTime: db.dbTime,
       bot: Boolean(process.env.TELEGRAM_BOT_TOKEN),
@@ -56,6 +57,9 @@ async function handler(request: Request): Promise<Response> {
           error: error instanceof Error ? error.message : 'Неизвестная ошибка',
           env: {
             DATABASE_URL: Boolean(process.env.DATABASE_URL),
+            // Имя переменной, из которой реально взята строка (например, tennisapp_POSTGRES_PRISMA_URL).
+            dbUrlFrom: dbUrl()?.from ?? null,
+            dbUrlCandidates: dbUrlCandidates(),
             // Интеграция Neon может положить строку под другим именем — показываем все.
             dbUrlVars: dbUrlPresence(),
             TELEGRAM_BOT_TOKEN: Boolean(process.env.TELEGRAM_BOT_TOKEN),

@@ -1,4 +1,4 @@
-import { getDb, json } from '../_lib/db.js'
+import { dbUrl, getDb, json } from '../_lib/db.js'
 
 /**
  * GET/POST /api/admin/setup — подготовить базу Neon из браузера.
@@ -175,11 +175,11 @@ const SEED = [
 
 async function handler(request: Request): Promise<Response> {
   try {
-    if (!process.env.DATABASE_URL) {
+    if (!dbUrl()) {
       return json(
         {
           ok: false,
-          error: 'DATABASE_URL не задан в переменных проекта',
+          error: 'Строка подключения к базе не найдена в переменных проекта',
           hint: 'Vercel → Settings → Environment Variables → добавь строку подключения Neon (pooled, sslmode=require) и сделай Redeploy',
         },
         500,

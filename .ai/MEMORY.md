@@ -94,6 +94,21 @@
 - Проверка: структура и ссылки между файлами сверены вручную; прикладной код отсутствует
   по определению — это шаблон.
 
+### Шаг 12: Интеграция Neon с префиксом `tennisapp_` — базы «не было»
+- Контекст: у интеграции Neon в Vercel включён **Custom Prefix** `tennisapp_`. В окружение доехали
+  только `tennisapp_POSTGRES_PRISMA_URL` и `tennisapp_POSTGRES_URL_NO_SSL` — ни `DATABASE_URL`,
+  ни `POSTGRES_URL`; `dbUrlVars` были все `false`, поэтому падали и API, и бот.
+- Решение: `dbUrl()` сначала проверяет известные имена (`DATABASE_URL`, `POSTGRES_URL`, `NEON_DATABASE_URL`,
+  `DATABASE_URL_UNPOOLED`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL`, `POSTGRES_URL_NO_SSL`),
+  затем ищет **любую** переменную со значением `postgres://…`, исключая `*PASSWORD*`, `*HOST*`, `*_USER`,
+  `*_NO_SSL`, и предпочитает pooled (`-pooler`). `normalizeDbUrl()` убирает prisma-параметры
+  (`pgbouncer`, `connect_timeout`, `schema`, …) и добавляет `sslmode=require`. `ping` отдаёт `dbFrom`,
+  `health?diag=1` — `dbUrlFrom` и `dbUrlCandidates` (только имена, без значений). `admin/setup` и бот
+  проверяют `dbUrl()`, а не конкретное имя.
+- Проверка: теневой прогон с `tennisapp_POSTGRES_PRISMA_URL` — строка выбрана и очищена, `ping` →
+  `hasDb: true` + `dbFrom`, `health` ok, пароля в ответе нет, `setup` — 18 стейтментов, без токена 401,
+  webhook `/start` — 200.
+
 ### Шаг 11: Бот молчит — тишина вместо ошибки + секрет webhook
 - Контекст: `/api/ping` зелёный, но `hasDb: false`; `/api/bot/setup` вернул `setWebhook: false`
   и `getWebhookInfo.url = ""` (webhook не стоит), `secretConfigured: true`.
@@ -295,3 +310,4 @@
 | 2026-11-02 | Фикс tsconfig-транспиляции функций, накатка базы из функции | агент |
 | 2026-11-03 | Web-сигнатура функций `{ fetch }` — фикс 500/504 | агент |
 | 2026-11-03 | Бот говорит об ошибке БД, диагностика Bot API, секрет webhook | агент |
+| 2026-11-03 | Поиск строки подключения при кастомном префиксе интеграции Neon | агент |
