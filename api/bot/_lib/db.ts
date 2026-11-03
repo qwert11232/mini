@@ -1,6 +1,11 @@
 import { neon } from '@neondatabase/serverless'
 import { dbUrl } from '../../_lib/db.js'
 
+export type { Keyboard } from './telegram.js'
+
+/** Результат действия панели: вебхук отвечает текстом в callback. */
+export type Result = { ok: true; message?: string } | { ok: false; message: string }
+
 type Sql = ReturnType<typeof neon>
 
 let cached: Sql | null = null
@@ -51,6 +56,7 @@ export function clubTime(date: Date): string {
   }).format(date)
 }
 
-export function money(value: number): string {
+export function money(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '—'
   return `${new Intl.NumberFormat('ru-RU').format(value)} ₽`
 }

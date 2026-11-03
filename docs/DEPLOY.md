@@ -58,7 +58,13 @@ curl -s localhost:5173/api/catalog    # корты, тренеры, заняти
 
 ## 2. Neon
 
-1. Neon уже подключён к Vercel: `DATABASE_URL` лежит в переменных проекта `mini`.
+1. Neon подключён к Vercel через интеграцию. **Внимание на префикс:** если в
+   Installation → Settings задан Custom Prefix (у нас был `tennisapp_`), переменные
+   называются `tennisapp_DATABASE_URL`, `tennisapp_POSTGRES_PRISMA_URL` и т.п.
+   Код это учитывает: `dbUrl()` в `api/_lib/db.ts` сначала смотрит известные имена,
+   затем любую переменную со значением `postgres://…`, предпочитая pooled-строку,
+   и вычищает prisma-параметры (`pgbouncer`, `connect_timeout`), добавляя `sslmode=require`.
+   Проверить, что именно найдено: `GET /api/ping` → поле `dbFrom`.
 2. **Схема и демо-данные накатываются из функции, не из сборки.** На этапе сборки
    `DATABASE_URL` недоступна (в логе: `[db-setup] DATABASE_URL не задан`), поэтому
    применяем одной ссылкой из браузера:
@@ -69,7 +75,10 @@ curl -s localhost:5173/api/catalog    # корты, тренеры, заняти
 
    Ответ: `{"ok":true,"applied":18,"counts":{"courts":4,"coaches":4,...}}`.
    Схема и сид идемпотентны — повторный вызов безопасен.
-3. Альтернативы: GitHub Actions (**Actions → db → Run workflow**, нужен секрет
+3. Если база уже наполнена, но панель бота ругается на отсутствующую таблицу или колонку —
+   в боте есть кнопка **«🔧 Починить схему»** (то же самое, что `/api/admin/setup`):
+   она досоздаёт недостающие таблицы и колонки и повторно прогоняет сид.
+4. Альтернативы: GitHub Actions (**Actions → db → Run workflow**, нужен секрет
    репозитория `DATABASE_URL`) или `psql "$DATABASE_URL" -f db/schema.sql && psql "$DATABASE_URL" -f db/seed.sql`.
 4. Проверка: `https://<проект>.vercel.app/api/ping` → `{"ok":true,"node":"v22.x",...}`,
    затем `/api/health?diag=1` → `ok: true` и данные из Neon.
@@ -92,7 +101,7 @@ curl -s localhost:5173/api/catalog    # корты, тренеры, заняти
 
    | Переменная | Значение |
    | --- | --- |
-   | `DATABASE_URL` | из Neon (создаётся интеграцией) |
+   | `DATABASE_URL` | из Neon (создаётся интеграцией; с Custom Prefix имя будет `tennisapp_DATABASE_URL` — это нормально) |
    | `TELEGRAM_BOT_TOKEN` | токен из @BotFather, без `VITE_` |
    | `VITE_TELEGRAM_BOT_NAME` | имя бота без `@` |
    | `VITE_APP_URL` | `https://<проект>.vercel.app` |
