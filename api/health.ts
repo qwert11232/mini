@@ -1,4 +1,4 @@
-import { failure, getDb, json } from './_lib/db.js'
+import { dbUrlPresence, failure, getDb, json } from './_lib/db.js'
 import { getWebhookInfo } from './bot/_lib/telegram.js'
 
 /**
@@ -56,12 +56,16 @@ async function handler(request: Request): Promise<Response> {
           error: error instanceof Error ? error.message : 'Неизвестная ошибка',
           env: {
             DATABASE_URL: Boolean(process.env.DATABASE_URL),
+            // Интеграция Neon может положить строку под другим именем — показываем все.
+            dbUrlVars: dbUrlPresence(),
             TELEGRAM_BOT_TOKEN: Boolean(process.env.TELEGRAM_BOT_TOKEN),
             TELEGRAM_WEBHOOK_SECRET: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET),
             SETUP_TOKEN: Boolean(process.env.SETUP_TOKEN ?? process.env.ADMIN_SETUP_TOKEN),
             VITE_APP_URL: process.env.VITE_APP_URL ?? '(не задан)',
           },
-          hint: 'Проверь DATABASE_URL: строка должна быть pooled и содержать sslmode=require',
+          hint:
+            'Ни одно из имён (DATABASE_URL, POSTGRES_URL, NEON_DATABASE_URL, DATABASE_URL_UNPOOLED, POSTGRES_URL_NON_POOLING) не задано. ' +
+            'Vercel → Storage → база → Connect Project (Production) либо Settings → Environment Variables, затем Redeploy.',
         },
         500,
       )

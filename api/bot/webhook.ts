@@ -1,5 +1,5 @@
 import { audit, getDb, isAdmin } from './_lib/db.js'
-import { answerCallback, editMessage, sendMessage, type Update } from './_lib/telegram.js'
+import { answerCallback, editMessage, sendMessage, webhookSecret, type Update } from './_lib/telegram.js'
 import {
   dayScreen,
   menuScreen,
@@ -39,7 +39,9 @@ async function handler(request: Request): Promise<Response> {
   }
 
   // Telegram присылает секрет в заголовке — иначе webhook открыт всему интернету.
-  const expected = process.env.TELEGRAM_WEBHOOK_SECRET
+  // Секрет, который Telegram не принимает по формату, здесь тоже не проверяем:
+  // иначе мы сами отбивали бы все апдейты и бот молчал бы.
+  const expected = webhookSecret()
   if (expected && request.headers.get('x-telegram-bot-api-secret-token') !== expected) {
     console.warn('[bot] отклонён запрос с неверным секретом webhook')
     return new Response('forbidden', { status: 403 })
@@ -66,18 +68,53 @@ async function handler(request: Request): Promise<Response> {
   return new Response('ok', { status: 200 })
 }
 
+/**
+ * Раньше ошибка «база не подключена» уходила только в лог, а Telegram получал 200 —
+ * в чате была тишина, и причину приходилось искать по /api/health. Теперь админ
+ * получает объяснение и ссылку на диагностику.
+ */
+async function withDb(chatId: number, work: () => Promise<void>): Promise<void> {
+  try {
+    await work()
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    console.error('[bot] ошибка работы с базой', reason)
+    if (chatId > 0) {
+      await sendMessage(
+        chatId,
+        [
+          '<b>Панель временно недоступна</b>',
+          '',
+          `Причина: ${escapeHtml(reason)}`,
+          '',
+          'Проверка связки: /api/health?diag=1 — там видно, задана ли строка подключения к базе.',
+        ].join('\n'),
+      )
+    } else {
+      await sendMessage(chatId, 'Панель временно недоступна: база не отвечает.')
+    }
+  }
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 async function handleMessage(update: Update): Promise<void> {
   const message = update.message
   if (!message?.from) return
 
+  const from = message.from
+  if (!from) return
+
   const chatId = message.chat.id
-  const admin = isAdmin(message.from.id, message.from.username)
+  const admin = isAdmin(from.id, from.username)
   const text = (message.text ?? '').trim()
   const command = text.split(/\s+/)[0]?.replace(/@.*$/, '').toLowerCase() ?? ''
 
   if (command === '/start') {
     if (admin) {
-      await render(chatId, await menuScreen())
+      await withDb(chatId, async () => render(chatId, await menuScreen()))
     } else {
       await sendMessage(chatId, HELP, {
         inline_keyboard: [[{ text: '🎾 Открыть приложение', url: appUrl() }]],
@@ -87,24 +124,7 @@ async function handleMessage(update: Update): Promise<void> {
   }
 
   if (command === '/me') {
-    const sql = getDb()
-    const rows = (await sql`
-      select b.title, b.status,
-             to_char(b.starts_at at time zone 'Europe/Moscow', 'DD.MM в HH24:MI') as start
-      from bookings b
-      join users u on u.id = b.user_id
-      where u.telegram_id = ${message.from.id} and b.status = 'active'
-      order by b.starts_at
-      limit 5
-    `) as unknown as { title: string; start: string }[]
-    if (rows.length === 0) {
-      await sendMessage(chatId, 'Активных записей нет. Возьмите корт или запишитесь на занятие в приложении.', {
-        inline_keyboard: [[{ text: '🎾 Открыть приложение', url: appUrl() }]],
-      })
-      return
-    }
-    const lines = rows.map((row) => `• ${row.start} — ${row.title}`)
-    await sendMessage(chatId, [`<b>Ваши записи</b>`, '', ...lines].join('\n'))
+    await withDb(chatId, () => meScreen(chatId, from.id))
     return
   }
 
@@ -115,25 +135,49 @@ async function handleMessage(update: Update): Promise<void> {
     return
   }
 
-  switch (command) {
-    case '/today':
-      await render(chatId, await dayScreen(0))
-      break
-    case '/tomorrow':
-      await render(chatId, await dayScreen(1))
-      break
-    case '/schedule':
-      await render(chatId, await sessionsScreen(0))
-      break
-    case '/orders':
-      await render(chatId, await ordersScreen())
-      break
-    case '/help':
-      await sendMessage(chatId, HELP)
-      break
-    default:
-      await render(chatId, await menuScreen())
+  await withDb(chatId, async () => {
+    switch (command) {
+      case '/today':
+        await render(chatId, await dayScreen(0))
+        break
+      case '/tomorrow':
+        await render(chatId, await dayScreen(1))
+        break
+      case '/schedule':
+        await render(chatId, await sessionsScreen(0))
+        break
+      case '/orders':
+        await render(chatId, await ordersScreen())
+        break
+      case '/help':
+        await sendMessage(chatId, HELP)
+        break
+      default:
+        await render(chatId, await menuScreen())
+    }
+  })
+}
+
+/** Мои записи — читается без админских прав, поэтому вынесено отдельной функцией. */
+async function meScreen(chatId: number, telegramId: number): Promise<void> {
+  const sql = getDb()
+  const rows = (await sql`
+    select b.title, b.status,
+           to_char(b.starts_at at time zone 'Europe/Moscow', 'DD.MM в HH24:MI') as start
+    from bookings b
+    join users u on u.id = b.user_id
+    where u.telegram_id = ${telegramId} and b.status = 'active'
+    order by b.starts_at
+    limit 5
+  `) as unknown as { title: string; start: string }[]
+  if (rows.length === 0) {
+    await sendMessage(chatId, 'Активных записей нет. Возьмите корт или запишитесь на занятие в приложении.', {
+      inline_keyboard: [[{ text: '🎾 Открыть приложение', url: appUrl() }]],
+    })
+    return
   }
+  const lines = rows.map((row) => `• ${row.start} — ${row.title}`)
+  await sendMessage(chatId, [`<b>Ваши записи</b>`, '', ...lines].join('\n'))
 }
 
 async function handleCallback(update: Update): Promise<void> {

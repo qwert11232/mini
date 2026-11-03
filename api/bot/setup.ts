@@ -1,5 +1,5 @@
 import { isAdmin } from './_lib/db.js'
-import { getWebhookInfo, setMyCommands, setWebhook } from './_lib/telegram.js'
+import { getWebhookInfo, setMyCommands, setWebhook, takeLastError, webhookSecret } from './_lib/telegram.js'
 import { verifyInitData } from '../_lib/telegram.js'
 
 /**
@@ -57,16 +57,17 @@ async function handler(request: Request): Promise<Response> {
 
     const base = (process.env.VITE_APP_URL ?? url.origin).replace(/\/$/, '')
     const webhookUrl = `${base}/api/bot/webhook`
-    const secret = process.env.TELEGRAM_WEBHOOK_SECRET ?? ''
+    const secret = webhookSecret()
 
     const webhookSet = await setWebhook(webhookUrl, secret)
-    steps.push({ step: 'setWebhook', ok: webhookSet, detail: webhookUrl })
+    const webhookError = webhookSet ? null : takeLastError()
+    steps.push({ step: 'setWebhook', ok: webhookSet, detail: webhookError ?? webhookUrl })
 
     await setMyCommands(COMMANDS)
     steps.push({ step: 'setMyCommands', ok: true, detail: COMMANDS.length })
 
-    const info = await getWebhookInfo()
-    steps.push({ step: 'getWebhookInfo', ok: true, detail: info })
+    const info = (await getWebhookInfo()) as Record<string, unknown> | null
+    steps.push({ step: 'getWebhookInfo', ok: Boolean(info), detail: info ?? takeLastError() })
 
     const ok = webhookSet
     console.info('[bot/setup]', { webhookUrl, ok, secretConfigured: Boolean(secret) })
@@ -77,9 +78,16 @@ async function handler(request: Request): Promise<Response> {
         webhook: webhookUrl,
         access: access.reason,
         secretConfigured: Boolean(secret),
+        // Переменная задана, но Telegram её не примет — иначе причина отказа не видна.
+        secretSkipped: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET) && !secret,
         adminIds: (process.env.ADMIN_TELEGRAM_IDS ?? '793536041').split(',').length,
         steps,
-        next: ok ? 'Напиши боту /start' : 'Telegram не подтвердил webhook — смотри detail',
+        // Самая частая причина отказа setWebhook — Telegram не смог скачать сертификат
+        // или достучаться до адреса; тогда в detail лежит текст от Bot API.
+        next: ok
+          ? 'Напиши боту /start'
+          : webhookError?.description ??
+            'Telegram не подтвердил webhook — смотри шаг setWebhook в steps',
       },
       ok ? 200 : 502,
     )
