@@ -106,6 +106,7 @@
   секрет не по формату `A-Za-z0-9_-{1,256}` и тогда проверка заголовка отключается (иначе бот молчит);
   `dbUrl()`/`dbUrlPresence()` ищут строку и в `POSTGRES_URL`, `NEON_DATABASE_URL`, `DATABASE_URL_UNPOOLED`,
   `POSTGRES_URL_NON_POOLING`; `health?diag=1` показывает `dbUrlVars` и все имена.
+- Мерж: PR #11 → `1801d79`, Vercel success.
 - Проверка: теневой прогон с заглушками Telegram/Neon — `/start` админом без БД даёт сообщение с причиной;
   `setup` с «плохим» секретом → `secretSkipped: true`, webhook ставится; апдейт без заголовка проходит 200;
   с валидным секретом неверный заголовок по-прежнему 403; ошибка Telegram видна в `steps[].detail`.
