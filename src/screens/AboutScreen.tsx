@@ -196,14 +196,14 @@ export function AboutScreen({ bookings, coaches: COACHES, mode, loading, onRetry
               <span className="group-icon"><IconCloud size={17} /></span>
               <span className="grow stack">
                 <span className="t-subhead" style={{ fontWeight: 550 }}>
-                  {mode === 'api' ? 'Vercel + Neon' : 'Локальные демо-данные'}
+                  {mode === 'api' ? 'Vercel + Neon' : 'Локальный режим'}
                 </span>
                 <span className="t-footnote">
                   {loading
                     ? 'Проверяем соединение…'
                     : mode === 'api'
-                      ? 'Записи сохраняются в базе клуба'
-                      : 'Сервер не подключён — записи сохраняются на устройстве'}
+                      ? 'Записи сохраняются в базе клуба и видны администратору в боте'
+                      : 'Сервер недоступен — записи сохраняются только на этом устройстве'}
                 </span>
               </span>
               {mode === 'demo' ? (

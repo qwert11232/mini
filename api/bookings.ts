@@ -1,5 +1,5 @@
-import { HttpError, failure, getDb, json, readNumber, readString } from './_lib/db.js'
-import { resolveUser } from './_lib/telegram.js'
+import { HttpError, failure, getDb, json, readNumber, readOptionalString, readString } from './_lib/db.js'
+import { readGuestSession, resolveUser } from './_lib/telegram.js'
 
 type BookingBody = {
   kind?: unknown
@@ -18,8 +18,11 @@ const KINDS = new Set(['training', 'free'])
 export async function listBookings(request: Request): Promise<Response> {
   try {
     const user = await resolveUser(request)
-    if (!user) throw new HttpError(401, 'Требуется вход через Telegram')
+    // Браузер без Telegram: ?mine=1 + X-DT-Device — тот же гость, что и при записи.
+    const guest = user ? null : new URL(request.url).searchParams.has('mine') ? readGuestSession(request) : null
+    if (!user && !guest) throw new HttpError(401, 'Требуется вход через Telegram')
 
+    const telegramId = user?.id ?? guest?.id ?? 0
     const sql = getDb()
     const rows = await sql`
       select b.id, b.kind, b.source_id as "sourceId", b.title, b.subtitle,
@@ -29,10 +32,10 @@ export async function listBookings(request: Request): Promise<Response> {
              extract(epoch from b.created_at) * 1000 as "createdAt"
       from bookings b
       join users u on u.id = b.user_id
-      where u.telegram_id = ${user.id} and b.status = 'active'
+      where u.telegram_id = ${telegramId} and b.status = 'active'
       order by b.created_at desc
     `
-    return json({ bookings: rows, user: { firstName: user.firstName } })
+    return json({ bookings: rows, user: { firstName: user?.firstName ?? guest?.firstName ?? 'Гость' } })
   } catch (error) {
     return failure(error, 'bookings.list')
   }
@@ -41,7 +44,9 @@ export async function listBookings(request: Request): Promise<Response> {
 /** POST /api/bookings — создать запись. Повтор на то же место не дублируется. */
 export async function createBooking(request: Request): Promise<Response> {
   try {
-    const user = await resolveUser(request)
+    const signed = await resolveUser(request)
+    const guest = signed ? null : readGuestSession(request)
+    const user = signed ?? guest
     if (!user) throw new HttpError(401, 'Требуется вход через Telegram')
 
     const body = (await request.json().catch(() => null)) as BookingBody | null
@@ -51,7 +56,7 @@ export async function createBooking(request: Request): Promise<Response> {
     if (!KINDS.has(kind)) throw new HttpError(400, 'Неизвестный тип записи')
     const sourceId = readString(body.sourceId, 'sourceId', 80)
     const title = readString(body.title, 'title', 120)
-    const subtitle = readString(body.subtitle, 'subtitle', 160)
+    const subtitle = readOptionalString(body.subtitle, 'subtitle', 160)
     const dayOffset = readNumber(body.dayOffset, 'dayOffset', 0, 30)
     const start = readString(body.start, 'start', 5)
     const durationMin = readNumber(body.durationMin, 'durationMin', 15, 240)
@@ -121,7 +126,9 @@ export async function createBooking(request: Request): Promise<Response> {
 /** DELETE /api/bookings?id=... — отмена. */
 export async function cancelBooking(request: Request): Promise<Response> {
   try {
-    const user = await resolveUser(request)
+    const signed = await resolveUser(request)
+    const guest = signed ? null : readGuestSession(request)
+    const user = signed ?? guest
     if (!user) throw new HttpError(401, 'Требуется вход через Telegram')
 
     const id = new URL(request.url).searchParams.get('id')

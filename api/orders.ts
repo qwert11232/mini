@@ -1,11 +1,13 @@
 import { HttpError, failure, getDb, json, readNumber, readString } from './_lib/db.js'
-import { resolveUser } from './_lib/telegram.js'
+import { readGuestSession, resolveUser } from './_lib/telegram.js'
 
 /** GET /api/orders — заказы текущего пользователя. */
 export async function listOrders(request: Request): Promise<Response> {
   try {
     const user = await resolveUser(request)
-    if (!user) throw new HttpError(401, 'Требуется вход через Telegram')
+    const guest = user ? null : readGuestSession(request)
+    if (!user && !guest) throw new HttpError(401, 'Требуется вход через Telegram')
+    const telegramId = user?.id ?? guest?.id ?? 0
 
     const sql = getDb()
     const rows = await sql`
@@ -14,7 +16,7 @@ export async function listOrders(request: Request): Promise<Response> {
       from orders o
       join users u on u.id = o.user_id
       join products p on p.id = o.product_id
-      where u.telegram_id = ${user.id}
+      where u.telegram_id = ${telegramId}
       order by o.created_at desc
       limit 50
     `
@@ -27,7 +29,9 @@ export async function listOrders(request: Request): Promise<Response> {
 /** POST /api/orders — оформить заказ (цена берётся из БД, не из клиента). */
 export async function createOrder(request: Request): Promise<Response> {
   try {
-    const user = await resolveUser(request)
+    const signed = await resolveUser(request)
+    const guest = signed ? null : readGuestSession(request)
+    const user = signed ?? guest
     if (!user) throw new HttpError(401, 'Требуется вход через Telegram')
 
     const body = (await request.json().catch(() => null)) as

@@ -117,6 +117,15 @@ export function failure(error: unknown, scope: string): Response {
   return json({ error: 'Внутренняя ошибка сервиса' }, 500)
 }
 
+/** Необязательный текст: пустая строка допустима (например, подзаголовок записи). */
+export function readOptionalString(value: unknown, field: string, maxLength = 200): string {
+  if (value === undefined || value === null || value === '') return ''
+  if (typeof value !== 'string') throw new HttpError(400, `Поле «${field}» должно быть строкой`)
+  const trimmed = value.trim()
+  if (trimmed.length > maxLength) throw new HttpError(400, `Поле «${field}» слишком длинное`)
+  return trimmed
+}
+
 export function readString(value: unknown, field: string, maxLength = 200): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new HttpError(400, `Поле «${field}» обязательно`)

@@ -1,17 +1,28 @@
 import { failure, getDb, json } from './_lib/db.js'
+import { resolveUser } from './_lib/telegram.js'
 
 /**
- * GET /api/catalog — всё, что нужно приложению при старте:
- * корты, тренеры, занятия на 7 дней, свободные окна, товары.
- * Кэш на 60 секунд: сетка меняется редко, но не должна залипать.
+ * Отдаём витрину: корты, тренеров, занятия (7 дней), свободные окна и товары.
+ *
+ * Без ?view=1 это персональный запрос: если подпись Telegram пришла и совпала,
+ * игрок попадает в базу. С ?view=1 — чистая витрина без записи в базу: её читает
+ * сайт в обычном браузере, где подписи Telegram нет. Выключенные тренеры,
+ * занятия, окна и товары не отдаются.
  */
-async function handler(): Promise<Response> {
+async function handler(request: Request): Promise<Response> {
   try {
+    const viewOnly = new URL(request.url).searchParams.has('view')
+
+    if (!viewOnly) {
+      // Ошибка подписи не должна ломать витрину — просто не регистрируем игрока.
+      await resolveUser(request).catch(() => null)
+    }
+
     const sql = getDb()
 
     const [courts, coaches, sessions, slots, products] = await Promise.all([
-      sql`select id, name, surface from courts order by sort_order`,
-      sql`select id, name, role, initials, rating::float as rating from coaches order by sort_order`,
+      sql`select id, name, surface from courts where is_active order by sort_order`,
+      sql`select id, name, role, initials, rating::float as rating from coaches where is_active order by sort_order`,
       sql`
         select s.id, s.title, s.group_kind as "group", s.level, s.coach_id as "coachId",
                s.court_id as "courtId", s.day_offset as "dayOffset", s.start_time as start,
@@ -22,11 +33,12 @@ async function handler(): Promise<Response> {
         order by s.day_offset, s.start_time
       `,
       sql`
-        select id, court_id as "courtId", day_offset as "dayOffset", start_time as start,
-               duration_min as "durationMin", price
-        from free_slots
-        where day_offset between 0 and 6 and is_active
-        order by day_offset, start_time
+        select f.id, f.court_id as "courtId", f.day_offset as "dayOffset", f.start_time as start,
+               f.duration_min as "durationMin", f.price
+        from free_slots f
+        join courts c on c.id = f.court_id and c.is_active
+        where f.day_offset between 0 and 6 and f.is_active
+        order by f.day_offset, f.start_time
       `,
       sql`
         select id, title, subtitle, category, price, old_price as "oldPrice",
@@ -37,8 +49,17 @@ async function handler(): Promise<Response> {
       `,
     ])
 
-    const response = json({ courts, coaches, sessions, slots, products })
-    response.headers.set('cache-control', 'public, s-maxage=60, stale-while-revalidate=300')
+    // Фото из бота лежит в Telegram (tg:<file_id>) — отдаём его через свой прокси,
+    // чтобы токен бота не попадал в разметку. Остальные пути (например /img/*) как есть.
+    const withImages = (products as { id: string; image: string | null }[]).map((product) => ({
+      ...product,
+      image: product.image?.startsWith('tg:')
+        ? `/api/image?product=${encodeURIComponent(product.id)}`
+        : product.image,
+    }))
+
+    const response = json({ courts, coaches, sessions, slots, products: withImages })
+    response.headers.set('cache-control', 'public, s-maxage=30, stale-while-revalidate=120')
     return response
   } catch (error) {
     return failure(error, 'catalog')
