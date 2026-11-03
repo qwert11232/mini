@@ -10,7 +10,7 @@ type Props = {
 export function DayStrip({ days, active, onSelect }: Props) {
   return (
     <div className="day-strip-wrap">
-      <div className="scroller scroller--bleed day-strip">
+      <div className="scroller day-strip">
         {days.map((offset) => {
           const isActive = offset === active
           return (

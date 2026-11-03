@@ -50,7 +50,7 @@ export async function verifyInitData(initData: string, maxAgeSeconds = 600): Pro
 
   const authDate = Number(params.get('auth_date') ?? 0)
   const age = Math.floor(Date.now() / 1000) - authDate
-  if (!authDate || age > maxAgeSeconds) throw new HttpError(401, 'Сессия Telegram устарела')
+  if (!Number.isFinite(authDate) || authDate <= 0 || age < -30 || age > maxAgeSeconds) throw new HttpError(401, 'Сессия Telegram устарела')
 
   const rawUser = params.get('user')
   if (!rawUser) throw new HttpError(400, 'В initData нет пользователя')

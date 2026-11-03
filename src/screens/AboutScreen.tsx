@@ -17,12 +17,12 @@ import {
   IconUsers,
 } from '../components/Icons'
 import type { Booking } from '../lib/types'
-import { ADMIN_BOT_URL } from '../lib/telegram'
+import { ADMIN_BOT_URL, isInsideTelegram } from '../lib/telegram'
 
 const FAQ = [
   {
     q: 'Как отменить запись?',
-    a: 'Отмена бесплатна за 3 часа до начала. В разделе «Занятия» нажмите на свою запись и выберите «Отменить».',
+    a: 'Откройте «О нас → Мои записи» и нажмите крестик рядом с записью. По вопросам отмены свяжитесь с клубом.',
   },
   {
     q: 'Нужна ли своя ракетка?',
@@ -87,7 +87,7 @@ export function AboutScreen({ bookings, coaches: COACHES, client, mode, loading,
           <h2 className="t-title3">Как всё устроено</h2>
           <div className="group">
             {[
-              { title: 'Один корт — одна игра', note: 'Аренда на час без подселения, если не выбрали иначе' },
+              { title: 'Один корт — одна игра', note: 'Аренда последовательных свободных окон без подселения' },
               { title: 'Тренер под уровень', note: 'Подбираем группу после первого занятия' },
               { title: 'Дети с 5 лет', note: 'Отдельные группы, мягкие мячи, мини-корт' },
               { title: 'Зимой — крытые корты', note: 'Круглый год, +18° и свет 1000 лк' },
@@ -222,14 +222,18 @@ export function AboutScreen({ bookings, coaches: COACHES, client, mode, loading,
               <span className="group-icon"><IconCloud size={17} /></span>
               <span className="grow stack">
                 <span className="t-subhead" style={{ fontWeight: 550 }}>
-                  {mode === 'api' ? 'Vercel + Neon' : 'Локальный режим'}
+                  {mode === 'api' ? 'Vercel + Neon' : import.meta.env.DEV ? 'Локальный предпросмотр' : 'Записи недоступны'}
                 </span>
                 <span className="t-footnote">
                   {loading
                     ? 'Проверяем соединение…'
                     : mode === 'api'
                       ? 'Записи сохраняются в базе клуба и видны администратору в боте'
-                      : 'Сервер недоступен — записи сохраняются только на этом устройстве'}
+                      : import.meta.env.DEV
+                        ? 'Демо-данные локального предпросмотра'
+                        : isInsideTelegram()
+                          ? 'Проверьте соединение или переоткройте приложение в Telegram'
+                          : 'Для записи и заказов откройте приложение в Telegram'}
                 </span>
               </span>
               {mode === 'demo' ? (
@@ -246,7 +250,7 @@ export function AboutScreen({ bookings, coaches: COACHES, client, mode, loading,
         <section className="about-note">
           <IconArrowUpRight size={16} />
           <p className="t-footnote">
-            Управление клубом и брони — через Telegram-бота. Панель администратора появится в следующей версии.
+            Управление клубом и брони — через Telegram-бота.
           </p>
         </section>
 

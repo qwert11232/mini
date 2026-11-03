@@ -59,6 +59,8 @@ async function handler(request: Request): Promise<Response> {
     const webhookUrl = `${base}/api/bot/webhook`
     const secret = webhookSecret()
 
+    if (!secret) return json({ ok: false, error: 'Настройте TELEGRAM_WEBHOOK_SECRET: 1–256 символов A-Z, a-z, 0-9, _ или -' }, 503)
+
     const webhookSet = await setWebhook(webhookUrl, secret)
     const webhookError = webhookSet ? null : takeLastError()
     steps.push({ step: 'setWebhook', ok: webhookSet, detail: webhookError ?? webhookUrl })
@@ -111,8 +113,7 @@ type Access = { allowed: boolean; reason: string }
  * Доступ к настройке:
  * 1) ?token= совпадает с SETUP_TOKEN;
  * 2) подпись администратора Telegram (вызов из мини-аппа);
- * 3) SETUP_TOKEN не задан — разрешаем: эндпоинт только переустанавливает webhook
- *    на собственный адрес приложения и не принимает URL извне, поэтому вреда нет.
+ * Если токен не задан, требуется подпись администратора Telegram.
  */
 async function checkAccess(request: Request, url: URL): Promise<Access> {
   const setupToken = process.env.SETUP_TOKEN
@@ -132,7 +133,6 @@ async function checkAccess(request: Request, url: URL): Promise<Access> {
     }
   }
 
-  if (!setupToken) return { allowed: true, reason: 'no_setup_token_configured' }
   return { allowed: false, reason: 'denied' }
 }
 

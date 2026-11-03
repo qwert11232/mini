@@ -9,7 +9,7 @@ import { SCHEMA, SEED } from '../_lib/schema.js'
  * из build-скрипта. В функции переменная есть — здесь и применяем.
  *
  * Схема и сид идемпотентны: повторный вызов ничего не ломает.
- * Доступ: ?token= (SETUP_TOKEN / ADMIN_SETUP_TOKEN) либо без токена, если ни один не задан.
+ * Доступ: только с настроенным SETUP_TOKEN или ADMIN_SETUP_TOKEN.
  */
 
 async function handler(request: Request): Promise<Response> {
@@ -27,7 +27,7 @@ async function handler(request: Request): Promise<Response> {
 
     const expected = process.env.ADMIN_SETUP_TOKEN ?? process.env.SETUP_TOKEN
     const provided = new URL(request.url).searchParams.get('token')
-    if (expected && provided !== expected) {
+    if (!expected || provided !== expected) {
       return json({ ok: false, error: 'Неверный или отсутствующий token' }, 401)
     }
 

@@ -8,7 +8,7 @@ import { dayName, endTime } from '../lib/date'
 import { formatPrice } from '../lib/format'
 import { haptic } from '../lib/telegram'
 
-const DAYS = [0, 1, 2, 3, 4, 5, 6]
+const DAYS = Array.from({ length: 30 }, (_, index) => index)
 
 type Props = {
   bookings: Booking[]
@@ -41,7 +41,7 @@ export function PlayScreen({ bookings, catalog, onBookSlot }: Props) {
       <ScreenHeader
         eyebrow="Без тренера"
         title="Свободная игра"
-        subtitle="Арендуйте корт на час — мячи и вода включены"
+        subtitle="Выберите свободное время на корте"
       />
 
       <DayStrip days={DAYS} active={day} onSelect={(value) => { haptic('select'); setDay(value) }} />

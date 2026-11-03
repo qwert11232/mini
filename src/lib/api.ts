@@ -65,7 +65,7 @@ export class ApiError extends Error {
 export const api = {
   catalog: () => request<Catalog>('/api/catalog'),
   me: () => request<{ user: { firstName: string }; hasBookings: boolean }>('/api/me'),
-  // ?mine=1 — «записи этого устройства»; работает и в браузере, и в Telegram.
+  // Персональные записи доступны только с подписью Telegram.
   bookings: () => request<{ bookings: Booking[]; user?: { firstName: string } }>('/api/bookings?mine=1'),
   createBooking: (draft: Omit<Booking, 'id' | 'createdAt'>) =>
     request<{ id: string }>('/api/bookings', { method: 'POST', body: JSON.stringify(draft) }),

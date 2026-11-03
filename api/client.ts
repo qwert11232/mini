@@ -1,21 +1,18 @@
 import { failure, HttpError, json, normalizePhone, readString } from './_lib/db.js'
 import { ensureCustomer, saveCustomerContact } from './_lib/customers.js'
-import { readGuestSession, resolveUser, type TelegramUser } from './_lib/telegram.js'
+import { resolveUser, type TelegramUser } from './_lib/telegram.js'
 
 /**
  * GET  /api/client — номер и сохранённые контакты текущего клиента.
  * POST /api/client — сохранить имя и телефон (используется и при заказе).
  *
- * В Telegram клиент определяется подписью initData, в обычном браузере —
- * ключом устройства. Номер выдаёт база, а не JavaScript: он не меняется при
+ * Клиент определяется подписью Telegram initData. Номер выдаёт база: он не меняется при
  * повторном открытии сайта и виден администратору в боте.
  */
 async function session(request: Request): Promise<TelegramUser> {
-  const signed = await resolveUser(request)
-  if (signed) return signed
-  const guest = readGuestSession(request)
-  if (!guest) throw new HttpError(401, 'Не удалось определить клиента. Обновите страницу.')
-  return guest
+  const user = await resolveUser(request)
+  if (!user) throw new HttpError(401, 'Откройте приложение в Telegram')
+  return user
 }
 
 function profile(customer: Awaited<ReturnType<typeof ensureCustomer>>) {
