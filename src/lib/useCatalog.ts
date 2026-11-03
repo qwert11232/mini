@@ -9,6 +9,7 @@ import { demoCatalog } from './store'
  */
 export function useCatalog() {
   const [catalog, setCatalog] = useState<Catalog>(() => demoCatalog())
+  const [revision, setRevision] = useState(0)
   const [source, setSource] = useState<'demo' | 'api'>('demo')
 
   useEffect(() => {
@@ -28,7 +29,7 @@ export function useCatalog() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [revision])
 
-  return { catalog, source }
+  return { catalog, source, refresh: () => setRevision((value) => value + 1) }
 }

@@ -92,11 +92,9 @@ async function handler(request: Request): Promise<Response> {
     })
   }
 
-  // Telegram присылает секрет в заголовке — иначе webhook открыт всему интернету.
-  // Секрет, который Telegram не принимает по формату, здесь тоже не проверяем:
-  // иначе мы сами отбивали бы все апдейты и бот молчал бы.
+  // Без секрета любой мог подделать update с ID администратора.
   const expected = webhookSecret()
-  if (expected && request.headers.get('x-telegram-bot-api-secret-token') !== expected) {
+  if (!expected || request.headers.get('x-telegram-bot-api-secret-token') !== expected) {
     console.warn('[bot] отклонён запрос с неверным секретом webhook')
     return new Response('forbidden', { status: 403 })
   }
@@ -283,7 +281,7 @@ async function handleText(chatId: number, adminId: number, waiting: Pending, tex
       if (waiting.field === 'price') draft.price = digits
       if (waiting.field === 'seats') draft.seats = digits
       if (waiting.field === 'duration') draft.durationMin = digits
-      if (waiting.field === 'days') draft.days = Math.min(Math.max(digits, 1), 7)
+      if (waiting.field === 'days') draft.days = Math.min(Math.max(digits, 1), 30)
       sessionDraft.set(chatId, draft)
       await render(chatId, sessionBuilderScreen(draft, await catalog.coaches(), await catalog.courts()))
       return true
@@ -293,7 +291,7 @@ async function handleText(chatId: number, adminId: number, waiting: Pending, tex
       const draft = slotDraft.get(chatId) ?? {}
       if (waiting.field === 'time') draft.time = text.trim()
       if (waiting.field === 'price') draft.price = digits
-      if (waiting.field === 'days') draft.days = Math.min(Math.max(digits, 1), 7)
+      if (waiting.field === 'days') draft.days = Math.min(Math.max(digits, 1), 30)
       slotDraft.set(chatId, draft)
       await render(chatId, slotBuilderScreen(draft, await catalog.courts()))
       return true
@@ -580,7 +578,7 @@ async function handleCallback(update: Update): Promise<void> {
                 ? 'Сколько мест в группе'
                 : field === 'duration'
                   ? 'Длительность в минутах'
-                  : 'На сколько дней вперёд поставить (1–7)'
+                  : 'На сколько дней вперёд поставить (1–30)'
       await editMessage(chatId, messageId, `<b>${hint}</b>\n\nПришлите значение сообщением.`, {
         inline_keyboard: [[{ text: '‹ Отмена', callback_data: 'sessions:0' }]],
       })
@@ -711,7 +709,7 @@ async function handleCallback(update: Update): Promise<void> {
           ? 'Время начала окна, ЧЧ:ММ'
           : field === 'price'
             ? 'Цена аренды — число'
-            : 'На сколько дней вперёд (1–7)'
+            : 'На сколько дней вперёд (1–30)'
       await editMessage(chatId, messageId, `<b>${hint}</b>\n\nПришлите значение сообщением.`, {
         inline_keyboard: [[{ text: '‹ Отмена', callback_data: 'slots:0' }]],
       })

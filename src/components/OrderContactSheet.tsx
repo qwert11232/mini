@@ -96,7 +96,7 @@ export function OrderContactSheet({
         <div className="contact-note">
           <span className="contact-note-icon"><IconPhone size={18} /></span>
           <p className="t-footnote">
-            Оставьте имя и телефон — администратор увидит их в заказе и сможет позвонить, когда всё будет готово.
+            Заказ доступен только из Telegram. Оставьте имя и телефон — администратор сможет связаться с вами.
           </p>
         </div>
 

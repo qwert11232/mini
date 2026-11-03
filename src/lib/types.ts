@@ -61,6 +61,7 @@ export type Product = {
 export type Booking = {
   id: string
   sourceId: string
+  sourceIds?: string[]
   kind: 'training' | 'free'
   title: string
   subtitle: string

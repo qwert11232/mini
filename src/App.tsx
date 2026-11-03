@@ -13,7 +13,7 @@ import { ShopScreen } from './screens/ShopScreen'
 import { AboutScreen } from './screens/AboutScreen'
 import { useStore } from './lib/store'
 import { useCatalog } from './lib/useCatalog'
-import { bookingFromSession, bookingFromSlot, type ActiveBooking } from './lib/booking'
+import { bookingFromSession, slotOptions, type ActiveBooking } from './lib/booking'
 import type { Product, SectionId } from './lib/types'
 import { haptic, initTelegram } from './lib/telegram'
 import { dayName, endTime } from './lib/date'
@@ -24,12 +24,13 @@ import './styles/app.css'
 export function App() {
   const [section, setSection] = useState<SectionId>('home')
   const [bookingTarget, setBookingTarget] = useState<ActiveBooking | null>(null)
+  const [bookingOptions, setBookingOptions] = useState<ActiveBooking[]>([])
   const [productId, setProductId] = useState<string | null>(null)
   const [orderDraft, setOrderDraft] = useState<{ product: Product; quantity: number } | null>(null)
   const [customOpen, setCustomOpen] = useState(false)
   const [ordersOpen, setOrdersOpen] = useState(false)
   const store = useStore()
-  const { catalog } = useCatalog()
+  const { catalog, refresh: refreshCatalog } = useCatalog()
   const { toast, show } = useToast()
 
   useEffect(() => {
@@ -42,6 +43,7 @@ export function App() {
 
   const openSession = useCallback(
     (id: string) => {
+      setBookingOptions([])
       setBookingTarget(bookingFromSession(catalog, id))
     },
     [catalog],
@@ -49,9 +51,11 @@ export function App() {
 
   const openSlot = useCallback(
     (id: string) => {
-      setBookingTarget(bookingFromSlot(catalog, id))
+      const options = slotOptions(catalog, id, store.bookings)
+      setBookingOptions(options)
+      setBookingTarget(options[0] ?? null)
     },
-    [catalog],
+    [catalog, store.bookings],
   )
 
   const confirmBooking = useCallback(() => {
@@ -61,6 +65,7 @@ export function App() {
     void store
       .book({
         sourceId: target.sourceId,
+        sourceIds: target.sourceIds,
         kind: target.kind,
         title: target.title,
         subtitle: target.subtitle,
@@ -71,6 +76,7 @@ export function App() {
       })
       .then((result) => {
         if (result.ok) {
+          refreshCatalog()
           haptic('success')
           show('Записано', `${dayName(target.dayOffset)}, ${target.start}–${endTime(target.start, target.durationMin)}`)
         } else {
@@ -78,7 +84,7 @@ export function App() {
           show('Не удалось записаться', result.error)
         }
       })
-  }, [bookingTarget, store, show])
+  }, [bookingTarget, store, show, refreshCatalog])
 
   const activeProduct = useMemo(
     () => catalog.products.find((product) => product.id === productId) ?? null,
@@ -121,7 +127,12 @@ export function App() {
             mode={store.mode}
             loading={store.loading}
             onRetry={store.retry}
-            onCancelBooking={store.cancelBooking}
+            onCancelBooking={(id) => {
+              void store.cancelBooking(id).then((result) => {
+                if (result.ok) { refreshCatalog(); show('Запись отменена') }
+                else show('Не удалось отменить запись', result.error)
+              })
+            }}
           />
         ) : null}
       </main>
@@ -129,7 +140,7 @@ export function App() {
       <TabBar active={section} onSelect={setSection} />
       <Toast toast={toast} />
 
-      <BookingSheet target={bookingTarget} onClose={() => setBookingTarget(null)} onConfirm={confirmBooking} />
+      <BookingSheet target={bookingTarget} options={bookingOptions} onSelect={setBookingTarget} onClose={() => setBookingTarget(null)} onConfirm={confirmBooking} />
 
       <ProductSheet
         product={activeProduct}

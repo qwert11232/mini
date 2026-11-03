@@ -114,7 +114,7 @@ export async function answerCallback(id: string, text?: string): Promise<void> {
 /**
  * Telegram принимает secret_token только из символов A-Za-z0-9_- (1–256).
  * Если в переменной есть что-то ещё, setWebhook отвечает Bad Request — и webhook
- * не встаёт. Такой секрет игнорируем целиком (на приёме апдейтов — тоже).
+ * не встаёт. При отсутствии или неверном формате приём апдейтов закрыт.
  */
 export function webhookSecret(): string | null {
   const value = process.env.TELEGRAM_WEBHOOK_SECRET

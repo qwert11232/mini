@@ -178,7 +178,7 @@ export async function sessionsScreen(offset: number): Promise<Screen> {
     from training_sessions s
     left join coaches c on c.id = s.coach_id
     left join courts k on k.id = s.court_id
-    where s.day_offset = ${offset}
+    where (s.starts_at at time zone 'Europe/Moscow')::date = (now() at time zone 'Europe/Moscow')::date + ${offset}::int
     order by s.start_time
   `) as unknown as SessionRow[]
 
@@ -244,7 +244,7 @@ export async function slotsScreen(offset: number): Promise<Screen> {
            c.name as court, c.surface
     from free_slots f
     left join courts c on c.id = f.court_id
-    where f.day_offset = ${offset}
+    where (f.starts_at at time zone 'Europe/Moscow')::date = (now() at time zone 'Europe/Moscow')::date + ${offset}::int
     order by f.start_time, c.sort_order
   `) as unknown as SlotRow[]
 

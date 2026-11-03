@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api } from './api'
+import { getTelegram } from './telegram'
 import { COACHES, COURTS, FREE_SLOTS, PRODUCTS, SESSIONS } from '../data/club'
 import type { Booking, ClientProfile, Order, OrderContact } from './types'
 
@@ -16,7 +17,7 @@ export type Store = {
   client: ClientProfile | null
   favorites: string[]
   book: (draft: Omit<Booking, 'id' | 'createdAt'>) => Promise<{ ok: boolean; error?: string }>
-  cancelBooking: (id: string) => Promise<void>
+  cancelBooking: (id: string) => Promise<{ ok: boolean; error?: string }>
   order: (
     productId: string,
     quantity: number,
@@ -55,8 +56,8 @@ function writeLocal(key: string, value: unknown): void {
 export function useStore(): Store {
   const [mode, setMode] = useState<Mode>(readMode)
   const [loading, setLoading] = useState(mode === 'api')
-  const [bookings, setBookings] = useState<Booking[]>(() => readLocal('dt.bookings.v1', []))
-  const [orders, setOrders] = useState<Order[]>(() => readLocal('dt.orders.v1', []))
+  const [bookings, setBookings] = useState<Booking[]>(() => import.meta.env.DEV ? readLocal('dt.bookings.v1', []) : [])
+  const [orders, setOrders] = useState<Order[]>(() => import.meta.env.DEV ? readLocal('dt.orders.v1', []) : [])
   const [client, setClient] = useState<ClientProfile | null>(null)
   const [favorites, setFavorites] = useState<string[]>(() => readLocal('dt.favorites.v1', []))
   const [attempt, setAttempt] = useState(0)
@@ -86,6 +87,19 @@ export function useStore(): Store {
       })
 
     api
+      .orders()
+      .then((data) => {
+        if (cancelled || !mounted.current) return
+        setOrders((previous) => [
+          ...previous.filter((item) => !data.orders.some((order) => order.id === item.id)),
+          ...data.orders,
+        ])
+      })
+      .catch(() => {
+        // Ошибка списка заказов не должна скрывать доступное расписание.
+      })
+
+    api
       .bookings()
       .then((data) => {
         if (cancelled || !mounted.current) return
@@ -108,11 +122,11 @@ export function useStore(): Store {
   }, [attempt])
 
   useEffect(() => {
-    if (mode === 'demo') writeLocal('dt.bookings.v1', bookings)
+    if (import.meta.env.DEV && mode === 'demo') writeLocal('dt.bookings.v1', bookings)
   }, [bookings, mode])
 
   useEffect(() => {
-    if (mode === 'demo') writeLocal('dt.orders.v1', orders)
+    if (import.meta.env.DEV && mode === 'demo') writeLocal('dt.orders.v1', orders)
   }, [orders, mode])
 
   useEffect(() => {
@@ -121,11 +135,13 @@ export function useStore(): Store {
 
   const book = useCallback(
     async (draft: Omit<Booking, 'id' | 'createdAt'>) => {
+      if (!import.meta.env.DEV && !getTelegram()?.initData) return { ok: false, error: 'Откройте приложение в Telegram, чтобы записаться.' }
+      if (!import.meta.env.DEV && mode !== 'api') return { ok: false, error: 'Сервис недоступен. Бронь не создана, попробуйте позже.' }
       if (mode === 'api') {
         try {
           await api.createBooking(draft)
-          const data = await api.bookings()
-          if (mounted.current) setBookings(data.bookings)
+          const data = await api.bookings().catch(() => null)
+          if (mounted.current && data) setBookings(data.bookings)
           return { ok: true }
         } catch (error) {
           if (error instanceof ApiError && error.status === 401) {
@@ -150,20 +166,24 @@ export function useStore(): Store {
       if (mode === 'api') {
         try {
           await api.cancelBooking(id)
-          const data = await api.bookings()
-          if (mounted.current) setBookings(data.bookings)
-          return
-        } catch {
-          // Ниже — локальная отмена, чтобы интерфейс не залипал.
+          const data = await api.bookings().catch(() => null)
+          if (mounted.current && data) setBookings(data.bookings)
+          return { ok: true }
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : 'Не удалось отменить запись' }
         }
       }
+      if (!import.meta.env.DEV) return { ok: false, error: 'Сервис недоступен. Запись не отменена.' }
       setBookings((prev) => prev.filter((item) => item.id !== id))
+      return { ok: true }
     },
     [mode],
   )
 
   const order = useCallback(
     async (productId: string, quantity: number, contact: OrderContact, productTitle?: string) => {
+      if (!import.meta.env.DEV && !getTelegram()?.initData) return { ok: false, error: 'Откройте приложение в Telegram, чтобы оформить заказ.' }
+      if (!import.meta.env.DEV && mode !== 'api') return { ok: false, error: 'Сервис недоступен. Заказ не создан, попробуйте позже.' }
       if (mode === 'api') {
         try {
           const created = await api.createOrder(productId, quantity, contact)

@@ -1,13 +1,11 @@
 import { HttpError, failure, getDb, json, normalizePhone, readNumber, readString } from './_lib/db.js'
 import { ensureCustomer, saveCustomerContact } from './_lib/customers.js'
-import { readGuestSession, resolveUser, type TelegramUser } from './_lib/telegram.js'
+import { resolveUser, type TelegramUser } from './_lib/telegram.js'
 
 async function session(request: Request): Promise<TelegramUser> {
-  const signed = await resolveUser(request)
-  if (signed) return signed
-  const guest = readGuestSession(request)
-  if (!guest) throw new HttpError(401, 'Требуется вход через Telegram или ключ устройства')
-  return guest
+  const user = await resolveUser(request)
+  if (!user) throw new HttpError(401, 'Откройте приложение в Telegram')
+  return user
 }
 
 /** GET /api/orders — заказы текущего пользователя. */
@@ -57,6 +55,16 @@ export async function createOrder(request: Request): Promise<Response> {
 
     const price = (product as { price: number }).price * quantity
     const customer = await saveCustomerContact(user, contactName, contactPhone)
+
+    const [usage] = await sql`
+      select count(*) filter (where created_at > now() - interval '1 hour')::int as recent,
+             count(*) filter (where status = 'reserved')::int as active
+      from orders where user_id = ${customer.id}
+    `
+    const limits = usage as { recent: number; active: number }
+    if (limits.recent >= 5 || limits.active >= 10) {
+      throw new HttpError(429, 'Слишком много заказов. Попробуйте позже или свяжитесь с клубом.')
+    }
 
     const [order] = await sql`
       insert into orders (user_id, product_id, quantity, price, contact_name, contact_phone)

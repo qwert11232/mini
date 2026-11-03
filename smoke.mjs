@@ -12,6 +12,7 @@ const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: tru
 const { window } = dom
 window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} })
 window.scrollTo = () => {}
+window.Telegram = { WebApp: { initData: 'test-init-data', platform: 'test', colorScheme: 'light', ready() {}, expand() {} } }
 
 const catalog = {
   courts: [
@@ -26,7 +27,10 @@ const catalog = {
       seatsTotal: 6, seatsTaken: 4,
     },
   ],
-  slots: [{ id: 'c1-07:00', courtId: 'c1', dayOffset: 0, start: '07:00', durationMin: 60, price: 2000 }],
+  slots: [
+    { id: 'c1-07:00', courtId: 'c1', dayOffset: 1, start: '07:00', durationMin: 60, price: 2000 },
+    { id: 'c1-08:00', courtId: 'c1', dayOffset: 1, start: '08:00', durationMin: 60, price: 2500 },
+  ],
   products: [
     {
       id: 'p1', title: 'Ракетка DT Control 300', subtitle: 'Баланс для любителя', category: 'Ракетки',
@@ -37,8 +41,12 @@ const catalog = {
 
 const calls = []
 // Фикстура занятия — на завтра: проверка не должна зависеть от текущего времени.
-window.fetch = async (url) => {
+window.fetch = async (url, init) => {
   calls.push(String(url))
+  if (String(url).includes('/api/bookings') && init?.method === 'POST') {
+    calls.push(JSON.parse(init.body))
+    return { ok: true, status: 201, json: async () => ({ id: 'test' }) }
+  }
   const body = String(url).includes('/api/client')
     ? { clientNo: 42, clientLabel: '№ 42', firstName: 'Демо', phone: null, hasPhone: false }
     : String(url).includes('/api/bookings')
@@ -79,6 +87,20 @@ const checks = {
   'тренер из API': text.includes('Артём Соколов'),
   'ошибок в консоли нет': errors.length === 0,
 }
+
+const click = async (element) => {
+  element?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await new Promise((resolve) => setTimeout(resolve, 30))
+}
+await click([...root.querySelectorAll('button')].find((button) => button.textContent.includes('Игра')))
+checks['лента содержит 30 дней'] = root.querySelectorAll('.day-chip').length === 30
+await click(root.querySelectorAll('.day-chip')[1])
+await click(root.querySelector('.slot'))
+const twoHours = [...root.querySelectorAll('[role="group"] button')].find((button) => button.textContent.includes('2 ч'))
+checks['выбор двух соседних окон'] = Boolean(twoHours) && twoHours.textContent.replace(/\s/g, '').includes('4500')
+await click(twoHours)
+await click(root.querySelector('.sheet-footer .btn-primary'))
+checks['выбранные окна отправлены вместе'] = calls.some((call) => typeof call === 'object' && JSON.stringify(call.sourceIds) === JSON.stringify(['c1-07:00', 'c1-08:00']))
 
 for (const [name, ok] of Object.entries(checks)) console.log(ok ? '✓' : '✗', name)
 if (errors.length) console.log(errors.slice(0, 3))

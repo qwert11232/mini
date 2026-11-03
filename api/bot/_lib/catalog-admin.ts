@@ -248,29 +248,21 @@ export async function createSession(
 ): Promise<Result & { created?: number }> {
   const error = validateSession(draft)
   if (error) return { ok: false, message: error }
-  if (!(draft.days >= 1 && draft.days <= 7)) return { ok: false, message: 'Повтор — от 1 до 7 дней' }
+  if (!(draft.days >= 1 && draft.days <= 30)) return { ok: false, message: 'Повтор — от 1 до 30 дней' }
 
   const sql = getDb()
   const stamp = Date.now().toString(36)
-  let created = 0
-
-  for (let day = 0; day < draft.days; day += 1) {
-    const id = `s-${stamp}-${day}`
-    await sql`
-      insert into training_sessions
-        (id, title, group_kind, level, coach_id, court_id, day_offset, start_time, duration_min, price, seats_total, seats_taken, is_active)
-      values (${id}, ${draft.title.trim().slice(0, 120)}, ${draft.groupKind}, ${draft.level},
-              ${draft.coachId}, ${draft.courtId}, ${day}, ${draft.start}, ${draft.durationMin},
-              ${Math.round(draft.price)}, ${draft.seatsTotal}, 0, true)
-    `
-    created += 1
-  }
-
-  await sql`
-    update training_sessions
-    set starts_at = date_trunc('day', now()) + make_interval(days => day_offset) + (start_time || ':00')::interval
-    where id like ${`s-${stamp}-%`}
+  const inserted = await sql`
+    insert into training_sessions
+      (id, title, group_kind, level, coach_id, court_id, day_offset, start_time, duration_min, price, seats_total, seats_taken, is_active, starts_at)
+    select 's-' || ${stamp} || '-' || day, ${draft.title.trim().slice(0, 120)}, ${draft.groupKind}, ${draft.level},
+           ${draft.coachId}, ${draft.courtId}, day, ${draft.start}, ${draft.durationMin}, ${Math.round(draft.price)},
+           ${draft.seatsTotal}, 0, true,
+           ((now() at time zone 'Europe/Moscow')::date + day + ${draft.start}::time) at time zone 'Europe/Moscow'
+    from generate_series(0, ${draft.days}::int - 1) as day
+    returning id
   `
+  const created = inserted.length
   await sql`insert into admin_audit (telegram_id, action, payload)
             values (${adminTelegramId}, 'session.create',
                     ${JSON.stringify({ title: draft.title, days: draft.days, start: draft.start })}::jsonb)`
@@ -299,7 +291,8 @@ export async function updateSession(
   const keys = Object.keys(values)
   if (keys.length === 0) return { ok: false, message: 'Нечего менять' }
 
-  const sets = keys.map((key, index) => `${key} = $${index + 1}`).join(', ')
+  const sets = keys.map((key, index) => `${key} = $${index + 1}`).join(', ') +
+    (patch.start !== undefined ? `, starts_at = ((starts_at at time zone 'Europe/Moscow')::date + $${keys.indexOf('start_time') + 1}::time) at time zone 'Europe/Moscow'` : '')
   const updated = await sql.query(`update training_sessions set ${sets} where id = $${keys.length + 1} returning id`, [
     ...keys.map((key) => values[key] as string | number | boolean),
     id,
@@ -359,28 +352,27 @@ export async function createSlots(
   adminTelegramId: number,
 ): Promise<Result & { created?: number }> {
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(input.start)) return { ok: false, message: 'Время в формате ЧЧ:ММ' }
-  if (!(input.days >= 1 && input.days <= 7)) return { ok: false, message: 'Повтор — от 1 до 7 дней' }
+  if (!(input.days >= 1 && input.days <= 30)) return { ok: false, message: 'Повтор — от 1 до 30 дней' }
 
   const sql = getDb()
-  let created = 0
-
-  for (let day = 0; day < input.days; day += 1) {
-    // id окна = корт + время + день: повторный запуск не создаёт дублей.
-    const id = `${input.courtId}-${input.start}-d${day}`
-    const inserted = (await sql`
-      insert into free_slots (id, court_id, day_offset, start_time, duration_min, price)
-      values (${id}, ${input.courtId}, ${day}, ${input.start}, ${input.durationMin}, ${Math.round(input.price)})
-      on conflict (id) do nothing
-      returning id
-    `) as unknown as { id: string }[]
-    if (inserted[0]) created += 1
-  }
-
-  await sql`
-    update free_slots
-    set starts_at = date_trunc('day', now()) + make_interval(days => day_offset) + (start_time || ':00')::interval
-    where id like ${`${input.courtId}-${input.start}-d%`}
+  const inserted = await sql`
+    insert into free_slots (id, court_id, day_offset, start_time, duration_min, price, starts_at)
+    select ${input.courtId} || '-' || ${input.start} || '-' || to_char(d.date, 'YYYY-MM-DD'),
+           ${input.courtId}, d.day, ${input.start}, ${input.durationMin}, ${Math.round(input.price)},
+           (d.date + ${input.start}::time) at time zone 'Europe/Moscow'
+    from (
+      select day, (now() at time zone 'Europe/Moscow')::date + day as date
+      from generate_series(0, ${input.days}::int - 1) as day
+    ) d
+    where not exists (
+      select 1 from free_slots f where f.court_id = ${input.courtId}
+        and f.starts_at < ((d.date + ${input.start}::time) at time zone 'Europe/Moscow') + ${input.durationMin}::int * interval '1 minute'
+        and f.starts_at + f.duration_min * interval '1 minute' > ((d.date + ${input.start}::time) at time zone 'Europe/Moscow')
+    )
+    on conflict (id) do nothing
+    returning id
   `
+  const created = inserted.length
   await sql`insert into admin_audit (telegram_id, action, payload)
             values (${adminTelegramId}, 'slots.create', ${JSON.stringify({ ...input, created })}::jsonb)`
   if (created === 0) return { ok: false, message: 'Такие окна уже есть' }

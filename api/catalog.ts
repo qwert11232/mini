@@ -25,20 +25,20 @@ async function handler(request: Request): Promise<Response> {
       sql`select id, name, role, initials, rating::float as rating from coaches where is_active order by sort_order`,
       sql`
         select s.id, s.title, s.group_kind as "group", s.level, s.coach_id as "coachId",
-               s.court_id as "courtId", s.day_offset as "dayOffset", s.start_time as start,
+               s.court_id as "courtId", ((s.starts_at at time zone 'Europe/Moscow')::date - (now() at time zone 'Europe/Moscow')::date) as "dayOffset", s.start_time as start,
                s.duration_min as "durationMin", s.price, s.seats_total as "seatsTotal",
                s.seats_taken as "seatsTaken"
         from training_sessions s
-        where s.day_offset between 0 and 6 and s.is_active
-        order by s.day_offset, s.start_time
+        where s.starts_at > now() and s.starts_at < ((now() at time zone 'Europe/Moscow')::date + 30)::timestamp at time zone 'Europe/Moscow' and s.is_active
+        order by s.starts_at
       `,
       sql`
-        select f.id, f.court_id as "courtId", f.day_offset as "dayOffset", f.start_time as start,
+        select f.id, f.court_id as "courtId", ((f.starts_at at time zone 'Europe/Moscow')::date - (now() at time zone 'Europe/Moscow')::date) as "dayOffset", f.start_time as start,
                f.duration_min as "durationMin", f.price
         from free_slots f
         join courts c on c.id = f.court_id and c.is_active
-        where f.day_offset between 0 and 6 and f.is_active
-        order by f.day_offset, f.start_time
+        where f.starts_at > now() and f.starts_at < ((now() at time zone 'Europe/Moscow')::date + 30)::timestamp at time zone 'Europe/Moscow' and f.is_active
+        order by f.starts_at
       `,
       sql`
         select id, title, subtitle, category, price, old_price as "oldPrice",
@@ -59,7 +59,7 @@ async function handler(request: Request): Promise<Response> {
     }))
 
     const response = json({ courts, coaches, sessions, slots, products: withImages })
-    response.headers.set('cache-control', 'public, s-maxage=30, stale-while-revalidate=120')
+    response.headers.set('cache-control', 'no-store')
     return response
   } catch (error) {
     return failure(error, 'catalog')

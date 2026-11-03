@@ -4,6 +4,7 @@ import type { Booking } from './types'
 export type ActiveBooking = {
   kind: Booking['kind']
   sourceId: string
+  sourceIds?: string[]
   eyebrow: string
   title: string
   subtitle: string
@@ -54,4 +55,34 @@ export function bookingFromSlot(catalog: Catalog, slotId: string): ActiveBooking
     durationMin: slot.durationMin,
     price: slot.price,
   }
+}
+
+/** Варианты строятся только из реально доступных соседних окон одного корта. */
+export function slotOptions(catalog: Catalog, slotId: string, bookings: Booking[]): ActiveBooking[] {
+  const first = catalog.slots.find((slot) => slot.id === slotId)
+  const base = bookingFromSlot(catalog, slotId)
+  if (!first || !base) return []
+  const booked = new Set(bookings.filter((item) => item.kind === 'free').map((item) => item.sourceId))
+  const candidates = catalog.slots.filter((slot) => slot.courtId === first.courtId && slot.dayOffset === first.dayOffset && !booked.has(slot.id))
+  const result: ActiveBooking[] = []
+  const ids: string[] = []
+  let current = first
+  let duration = 0
+  let price = 0
+  while (current && duration + current.durationMin <= 240 && ids.length < 8) {
+    ids.push(current.id)
+    duration += current.durationMin
+    price += current.price
+    result.push({ ...base, sourceIds: [...ids], durationMin: duration, price })
+    const [hour, minute] = current.start.split(':').map(Number)
+    const end = (hour ?? 0) * 60 + (minute ?? 0) + current.durationMin
+    if (end >= 1440) break
+    const next = candidates.find((slot) => {
+      const [h, m] = slot.start.split(':').map(Number)
+      return (h ?? 0) * 60 + (m ?? 0) === end && !ids.includes(slot.id)
+    })
+    if (!next) break
+    current = next
+  }
+  return result
 }

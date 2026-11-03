@@ -129,21 +129,48 @@ export function previewApi(): Plugin {
           const kind = String(body.kind ?? '')
 
           if (kind === 'free') {
-            const slot = store.slots.find((item) => item.id === sourceId)
-            if (!slot || slot.isActive === false) {
+            const ids = Array.isArray(body.sourceIds) ? body.sourceIds : [sourceId]
+            const slots = ids.map((id) => store.slots.find((item) => item.id === id && item.isActive !== false))
+            if (ids.length < 1 || ids.length > 8 || ids[0] !== sourceId || new Set(ids).size !== ids.length || slots.some((slot) => !slot)) {
               return send(res, 409, { error: 'Это время уже заняли — выберите другое' })
             }
-            slot.isActive = false
+            const ordered = slots as Record<string, unknown>[]
+            const startMinutes = (slot: Record<string, unknown>) => {
+              const [h, m] = String(slot.start).split(':').map(Number)
+              return (h ?? 0) * 60 + (m ?? 0)
+            }
+            const duration = ordered.reduce((sum, slot) => sum + Number(slot.durationMin), 0)
+            if (duration > 240 || ordered.some((slot, index) => index > 0 && (
+              slot.courtId !== ordered[0]?.courtId || slot.dayOffset !== ordered[0]?.dayOffset ||
+              startMinutes(slot) !== startMinutes(ordered[index - 1]!) + Number(ordered[index - 1]!.durationMin)
+            ))) return send(res, 400, { error: 'Выберите последовательные окна одного корта' })
+            const bookings = ordered.map((slot, index) => ({
+              ...body, sourceIds: undefined, sourceId: slot.id, start: slot.start,
+              durationMin: slot.durationMin, price: slot.price,
+              id: `bk-${Date.now().toString(36)}-${index}`, createdAt: Date.now(),
+            }))
+            ordered.forEach((slot) => { slot.isActive = false })
+            store.bookings.unshift(...bookings)
+            await saveStore(store)
+            return send(res, 201, { id: bookings[0]?.id, ids: bookings.map((booking) => booking.id) })
           }
 
           if (kind === 'training') {
             const session = store.sessions.find((item) => item.id === sourceId)
-            if (session) {
-              const total = Number(session.seatsTotal)
-              const taken = Number(session.seatsTaken)
-              if (taken >= total) return send(res, 409, { error: 'Мест на это занятие больше нет' })
-              session.seatsTaken = taken + 1
+            if (!session) return send(res, 404, { error: 'Занятие не найдено' })
+            const total = Number(session.seatsTotal)
+            const taken = Number(session.seatsTaken)
+            if (taken >= total || store.bookings.some((item) => item.kind === kind && item.sourceId === sourceId)) {
+              return send(res, 409, { error: 'Мест нет или вы уже записаны' })
             }
+            session.seatsTaken = taken + 1
+            body.title = session.title
+            body.start = session.start
+            body.durationMin = session.durationMin
+            body.price = session.price
+            body.dayOffset = session.dayOffset
+          } else {
+            return send(res, 400, { error: 'Неизвестный тип записи' })
           }
 
           const booking = {

@@ -8,7 +8,7 @@ import { SessionCard } from '../components/SessionCard'
 import { IconBall } from '../components/Icons'
 import { haptic } from '../lib/telegram'
 
-const DAYS = [0, 1, 2, 3, 4, 5, 6]
+const DAYS = Array.from({ length: 30 }, (_, index) => index)
 const GROUP_FILTERS = ['Все', ...GROUPS] as const
 
 type Props = {

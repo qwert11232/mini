@@ -3,15 +3,17 @@ import { dayName, endTime, formatDuration, weekdayWithMonth } from '../lib/date'
 import { formatPrice } from '../lib/format'
 import { CLUB } from '../data/club'
 import { Sheet } from './Sheet'
-import { IconCheck, IconClock, IconPin, IconUsers } from './Icons'
+import { IconPin, IconUsers } from './Icons'
 
 type Props = {
   target: ActiveBooking | null
+  options: ActiveBooking[]
+  onSelect: (option: ActiveBooking) => void
   onClose: () => void
   onConfirm: () => void
 }
 
-export function BookingSheet({ target, onClose, onConfirm }: Props) {
+export function BookingSheet({ target, options, onSelect, onClose, onConfirm }: Props) {
   const open = target !== null
 
   return (
@@ -28,6 +30,7 @@ export function BookingSheet({ target, onClose, onConfirm }: Props) {
     >
       {target ? (
         <div className="stack gap-4">
+          <p className="t-footnote">Для записи откройте приложение в Telegram.</p>
           <div className="booking-hero">
             <p className="t-caption" style={{ color: 'var(--green-200)' }}>{target.eyebrow}</p>
             <p className="t-title3" style={{ color: '#fff', marginTop: 6 }}>{target.title}</p>
@@ -47,10 +50,25 @@ export function BookingSheet({ target, onClose, onConfirm }: Props) {
               </div>
               <div>
                 <span className="booking-key">Оплата</span>
-                <span className="booking-val">На месте или в боте</span>
+                <span className="booking-val">На ресепшене</span>
               </div>
             </div>
           </div>
+
+          {target.kind === 'free' && options.length > 1 ? (
+            <div className="stack gap-2">
+              <p className="t-headline">Продолжительность</p>
+              <div className="scroller scroller--flat" role="group" aria-label="Продолжительность аренды">
+                {options.map((option) => (
+                  <button key={option.durationMin} type="button" className="chip"
+                    aria-pressed={target.durationMin === option.durationMin} onClick={() => onSelect(option)}>
+                    {formatDuration(option.durationMin)} · {formatPrice(option.price)}
+                  </button>
+                ))}
+              </div>
+              <p className="t-footnote">Последовательные окна бронируются вместе, отменить их можно по отдельности.</p>
+            </div>
+          ) : null}
 
           <div className="group">
             <div className="group-row">
@@ -64,26 +82,13 @@ export function BookingSheet({ target, onClose, onConfirm }: Props) {
               <span className="group-icon"><IconUsers size={18} /></span>
               <span className="grow stack">
                 <span className="t-subhead" style={{ fontWeight: 550 }}>{target.people}</span>
-                <span className="t-footnote">Отмена бесплатно за 3 часа до начала</span>
+                <span className="t-footnote">Отменить запись можно в разделе «О нас»</span>
               </span>
             </div>
-            <div className="group-row">
-              <span className="group-icon"><IconClock size={18} /></span>
-              <span className="grow stack">
-                <span className="t-subhead" style={{ fontWeight: 550 }}>Напоминание в Telegram</span>
-                <span className="t-footnote">За 2 часа до занятия</span>
-              </span>
-            </div>
+
           </div>
 
-          <ul className="booking-perks">
-            {['Подтверждение придёт в чат', 'Можно перенести один раз', 'Оплата картой или на ресепшене'].map((item) => (
-              <li key={item} className="row gap-2 t-footnote">
-                <IconCheck size={14} strokeWidth={2.4} className="booking-check" />
-                {item}
-              </li>
-            ))}
-          </ul>
+
         </div>
       ) : null}
     </Sheet>
