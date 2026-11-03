@@ -1,4 +1,5 @@
 import { neon } from '@neondatabase/serverless'
+import { dbUrl } from '../../_lib/db.js'
 
 type Sql = ReturnType<typeof neon>
 
@@ -6,9 +7,9 @@ let cached: Sql | null = null
 
 export function getDb(): Sql {
   if (cached) return cached
-  const url = process.env.DATABASE_URL
-  if (!url) throw new Error('DATABASE_URL не задан')
-  cached = neon(url)
+  const found = dbUrl()
+  if (!found) throw new Error('DATABASE_URL не задан')
+  cached = neon(found.url)
   return cached
 }
 

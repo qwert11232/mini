@@ -5,6 +5,17 @@
 
 type ApiResponse<T> = { ok: true; result: T } | { ok: false; description?: string; error_code?: number }
 
+/** Последняя ошибка Bot API — нужна в диагностике вместо безликого false. */
+export type ApiError = { method: string; status: number; code?: number; description?: string }
+
+let lastError: ApiError | null = null
+
+export function takeLastError(): ApiError | null {
+  const error = lastError
+  lastError = null
+  return error
+}
+
 export type InlineButton =
   | { text: string; callback_data: string }
   | { text: string; url: string }
@@ -50,13 +61,16 @@ async function call<T>(method: string, payload: Record<string, unknown>): Promis
 
   const data = (await response.json().catch(() => null)) as ApiResponse<T> | null
   if (!data?.ok) {
-    console.error(`[bot] ${method} failed`, {
+    lastError = {
+      method,
       status: response.status,
       code: data && 'error_code' in data ? data.error_code : undefined,
       description: data && 'description' in data ? data.description : undefined,
-    })
+    }
+    console.error(`[bot] ${method} failed`, lastError)
     return null
   }
+  lastError = null
   return data.result
 }
 
@@ -95,10 +109,21 @@ export async function answerCallback(id: string, text?: string): Promise<void> {
   await call('answerCallbackQuery', { callback_query_id: id, text, show_alert: false })
 }
 
-export async function setWebhook(url: string, secret: string): Promise<boolean> {
+/**
+ * Telegram принимает secret_token только из символов A-Za-z0-9_- (1–256).
+ * Если в переменной есть что-то ещё, setWebhook отвечает Bad Request — и webhook
+ * не встаёт. Такой секрет игнорируем целиком (на приёме апдейтов — тоже).
+ */
+export function webhookSecret(): string | null {
+  const value = process.env.TELEGRAM_WEBHOOK_SECRET
+  if (!value) return null
+  return /^[A-Za-z0-9_-]{1,256}$/.test(value) ? value : null
+}
+
+export async function setWebhook(url: string, secret: string | null): Promise<boolean> {
   const result = await call<boolean>('setWebhook', {
     url,
-    secret_token: secret,
+    ...(secret ? { secret_token: secret } : {}),
     allowed_updates: ['message', 'callback_query'],
     drop_pending_updates: true,
   })
