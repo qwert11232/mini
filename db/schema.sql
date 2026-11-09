@@ -144,3 +144,14 @@ create table if not exists admin_audit (
   created_at timestamptz not null default now()
 );
 
+-- ─── bot_dialog_state ────────────────────────────────────────────
+-- Черновики админ-бота: не связаны с бронями и заказами.
+create table if not exists bot_dialog_state (
+  chat_id bigint primary key,
+  pending jsonb,
+  product_draft jsonb,
+  session_draft jsonb,
+  slot_draft jsonb,
+  updated_at timestamptz not null default now()
+);
+

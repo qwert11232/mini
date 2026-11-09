@@ -313,10 +313,10 @@ export async function courtLoad(): Promise<LoadRow[]> {
 // ─── Ремонт схемы ───────────────────────────────────────────────────────────
 
 /**
- * В одной транзакции досоздаёт недостающие таблицы и колонки и повторно
- * прогоняет сид. Нужно, потому что на существующей базе `create table if not
- * exists` не добавляет новые колонки (у нас так не появился `admin_note`),
- * а `alter table` в схеме идемпотентен.
+ * Оставлена для обратной совместимости, webhook её больше не вызывает.
+ * Statements включали SCHEMA + SEED: повторный прогон на рабочей базе мог
+ * добавить демо-данные и сдвинуть starts_at. Для миграции состояния бота
+ * используйте /api/admin/migrate-bot-state — он создаёт только новую таблицу.
  */
 export async function repairSchema(statements: string[]): Promise<{ applied: number }> {
   const sql = getDb()

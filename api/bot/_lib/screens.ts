@@ -512,11 +512,11 @@ export async function dbErrorScreen(reason: string): Promise<Screen> {
       '',
       `Причина: ${escapeHtml(reason)}`,
       '',
+      'Не запускайте подготовку базы без резервной копии. Передайте причину разработчику.',
       'Проверка связки: /api/health?diag=1',
     ].join('\n'),
     keyboard: {
       inline_keyboard: [
-        [{ text: '🔧 Починить схему', callback_data: 'repair' }],
         [{ text: '🌐 Проверка /api/health', url: `${appUrl()}/api/health?diag=1` }],
       ],
     },

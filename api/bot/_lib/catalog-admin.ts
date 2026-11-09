@@ -274,6 +274,9 @@ export async function updateSession(
   patch: Partial<SessionDraft> & { isActive?: boolean },
   adminTelegramId: number,
 ): Promise<Result> {
+  if (patch.start !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(patch.start)) {
+    return { ok: false, message: 'Время в формате ЧЧ:ММ' }
+  }
   const sql = getDb()
   const values: Record<string, unknown> = {}
 
@@ -292,7 +295,7 @@ export async function updateSession(
   if (keys.length === 0) return { ok: false, message: 'Нечего менять' }
 
   const sets = keys.map((key, index) => `${key} = $${index + 1}`).join(', ') +
-    (patch.start !== undefined ? `, starts_at = ((starts_at at time zone 'Europe/Moscow')::date + $${keys.indexOf('start_time') + 1}::time) at time zone 'Europe/Moscow'` : '')
+    (patch.start !== undefined ? `, starts_at = ((starts_at at time zone 'Europe/Moscow')::date + $${keys.indexOf('start_time') + 1}::text::time) at time zone 'Europe/Moscow'` : '')
   const updated = await sql.query(`update training_sessions set ${sets} where id = $${keys.length + 1} returning id`, [
     ...keys.map((key) => values[key] as string | number | boolean),
     id,

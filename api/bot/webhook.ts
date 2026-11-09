@@ -15,7 +15,6 @@ import {
   closeSlot,
   markVisited,
   openSlot,
-  repairSchema,
   reserveSeat,
   restoreBooking,
   toggleProduct,
@@ -43,14 +42,19 @@ import {
   sessionBuilderScreen,
   sessionCardScreen,
   slotBuilderScreen,
-  type ProductDraft,
-  type SessionBuildDraft,
   sessionsScreen,
   slotsScreen,
   usersScreen,
   type Screen,
 } from './_lib/screens.js'
-import { SCHEMA, SEED } from '../_lib/schema.js'
+import {
+  emptyDialog,
+  loadDialogState,
+  saveDialogState,
+  stateMaps,
+  type DialogMaps,
+  type Pending,
+} from './_lib/state.js'
 
 const HELP = [
   '<b>ДТ · бот клуба</b>',
@@ -66,23 +70,6 @@ const HELP = [
   'Записаться на занятие и арендовать корт можно в приложении.',
 ].join('\n')
 
-/** Состояние диалога: админ присылает значение текстом или фото. */
-type Pending =
-  | { kind: 'price'; sessionId: string }
-  | { kind: 'note'; playerId: string }
-  | { kind: 'sessionField'; field: 'price' | 'time' | 'seats' | 'duration'; sessionId: string }
-  | { kind: 'productField'; field: 'title' | 'subtitle' | 'price'; productId: string }
-  | { kind: 'newProductField'; field: 'title' | 'subtitle' | 'price' }
-  | { kind: 'newSessionField'; field: 'title' | 'time' | 'price' | 'seats' | 'duration' | 'days' }
-  | { kind: 'newSlotField'; field: 'time' | 'price' | 'days' }
-  | { kind: 'productPhoto'; productId: string }
-
-/** Черновики конструкторов живут в памяти инстанса: один админ — один чат. */
-const productDraft = new Map<number, ProductDraft>()
-const sessionDraft = new Map<number, SessionBuildDraft>()
-const slotDraft = new Map<number, { time?: string; price?: number; days?: number; courtId?: string }>()
-
-const pending = new Map<number, Pending>()
 
 async function handler(request: Request): Promise<Response> {
   if (request.method !== 'POST') {
@@ -106,13 +93,41 @@ async function handler(request: Request): Promise<Response> {
     return new Response('bad request', { status: 400 })
   }
 
+  const from = update.callback_query?.from ?? update.message?.from
+  const chatId = update.callback_query?.message?.chat.id ?? update.message?.chat.id
+  const admin = from ? isAdmin(from.id, from.username) : false
+
   try {
-    if (update.callback_query) {
-      await safe(update.callback_query.from.id, () => handleCallback(update))
-    } else if (update.message) {
-      // Не только текст: админ присылает фото товара, у такого сообщения нет text.
-      await safe(update.message.from?.id, () => handleMessage(update))
+    if (!chatId) {
+      // Callback без сообщения (например, inline-режим) всё равно нужно закрыть.
+      if (update.callback_query) await answerCallback(update.callback_query.id)
+      return new Response('ok', { status: 200 })
     }
+
+    // Гостям таблица состояния не нужна: их сообщения не запускают конструкторы.
+    if (!admin) {
+      await safe(chatId, async () => {
+        const state = stateMaps(emptyDialog())
+        if (update.callback_query) await handleCallback(update, state)
+        else if (update.message) await handleMessage(update, state)
+      })
+      return new Response('ok', { status: 200 })
+    }
+
+    await safe(chatId, async () => {
+      const dialog = await loadDialogState(chatId)
+      const state = stateMaps(dialog)
+      let failure: unknown = null
+      try {
+        if (update.callback_query) await handleCallback(update, state)
+        else if (update.message) await handleMessage(update, state)
+      } catch (error) {
+        // Состояние сохраняем даже при ошибке экрана: шаги не должны теряться.
+        failure = error
+      }
+      await saveDialogState(chatId, dialog)
+      if (failure) throw failure
+    })
   } catch (error) {
     console.error('[bot] ошибка обработки', error instanceof Error ? error.message : error)
   }
@@ -123,7 +138,7 @@ async function handler(request: Request): Promise<Response> {
 
 /**
  * Раньше ошибка «база не подключена» уходила только в лог, а Telegram получал 200 —
- * в чате была тишина. Теперь админ видит причину и кнопку починки схемы.
+ * в чате была тишина. Теперь админ видит причину и ссылку на диагностику.
  */
 async function safe(chatId: number | undefined, work: () => Promise<void>): Promise<void> {
   try {
@@ -139,7 +154,7 @@ async function safe(chatId: number | undefined, work: () => Promise<void>): Prom
 
 // ─── Сообщения ──────────────────────────────────────────────────────────────
 
-async function handleMessage(update: Update): Promise<void> {
+async function handleMessage(update: Update, state: DialogMaps): Promise<void> {
   const message = update.message
   const from = message?.from
   if (!message || !from) return
@@ -147,8 +162,8 @@ async function handleMessage(update: Update): Promise<void> {
   // Фото от админа: обложка товара (в карточке товара или в конструкторе).
   const photo = message.photo?.[message.photo.length - 1]
   if (photo && isAdmin(from.id, from.username)) {
-    const waiting = pending.get(message.chat.id)
-    pending.delete(message.chat.id)
+    const waiting = state.pending.get(message.chat.id)
+    state.pending.delete(message.chat.id)
     const target = waiting?.kind === 'productPhoto' ? waiting.productId : null
     if (target) {
       const result = await catalog.setProductPhoto(target, photo, from.id)
@@ -165,8 +180,8 @@ async function handleMessage(update: Update): Promise<void> {
   const command = text.split(/\s+/)[0]?.replace(/@.*$/, '').toLowerCase() ?? ''
 
   // Текстовый ввод от админа: цена, заметка, поля товара или занятия.
-  const waiting = pending.get(chatId)
-  if (waiting && admin && (await handleText(chatId, from.id, waiting, text))) return
+  const waiting = state.pending.get(chatId)
+  if (waiting && admin && (await handleText(chatId, from.id, waiting, text, state))) return
 
   if (command === '/start') {
     if (admin) {
@@ -216,9 +231,9 @@ async function handleMessage(update: Update): Promise<void> {
  * Текстовый ввод админа. Возвращает true, если сообщение было ответом на вопрос
  * конструктора и обрабатывать его как команду не нужно.
  */
-async function handleText(chatId: number, adminId: number, waiting: Pending, text: string): Promise<boolean> {
+async function handleText(chatId: number, adminId: number, waiting: Pending, text: string, state: DialogMaps): Promise<boolean> {
   if (text.startsWith('/')) {
-    pending.delete(chatId)
+    state.pending.delete(chatId)
     return false
   }
 
@@ -226,17 +241,17 @@ async function handleText(chatId: number, adminId: number, waiting: Pending, tex
 
   switch (waiting.kind) {
     case 'price': {
-      pending.delete(chatId)
+      state.pending.delete(chatId)
       await answer(chatId, await setSessionPrice(waiting.sessionId, digits, adminId), await sessionsScreen(0))
       return true
     }
     case 'note': {
-      pending.delete(chatId)
+      state.pending.delete(chatId)
       await answer(chatId, await saveNote(waiting.playerId, text), await usersScreen())
       return true
     }
     case 'sessionField': {
-      pending.delete(chatId)
+      state.pending.delete(chatId)
       const patch =
         waiting.field === 'price'
           ? { price: digits }
@@ -249,7 +264,7 @@ async function handleText(chatId: number, adminId: number, waiting: Pending, tex
       return true
     }
     case 'productField': {
-      pending.delete(chatId)
+      state.pending.delete(chatId)
       const patch =
         waiting.field === 'price'
           ? { price: digits }
@@ -264,40 +279,40 @@ async function handleText(chatId: number, adminId: number, waiting: Pending, tex
       return true
     }
     case 'newProductField': {
-      pending.delete(chatId)
-      const draft = productDraft.get(chatId) ?? {}
+      state.pending.delete(chatId)
+      const draft = state.productDraft.get(chatId) ?? {}
       if (waiting.field === 'title') draft.title = text.trim()
       if (waiting.field === 'subtitle') draft.subtitle = text.trim()
       if (waiting.field === 'price') draft.price = digits
-      productDraft.set(chatId, draft)
+      state.productDraft.set(chatId, draft)
       await render(chatId, newProductScreen(draft))
       return true
     }
     case 'newSessionField': {
-      pending.delete(chatId)
-      const draft = sessionDraft.get(chatId) ?? {}
+      state.pending.delete(chatId)
+      const draft = state.sessionDraft.get(chatId) ?? {}
       if (waiting.field === 'title') draft.title = text.trim()
       if (waiting.field === 'time') draft.time = text.trim()
       if (waiting.field === 'price') draft.price = digits
       if (waiting.field === 'seats') draft.seats = digits
       if (waiting.field === 'duration') draft.durationMin = digits
       if (waiting.field === 'days') draft.days = Math.min(Math.max(digits, 1), 30)
-      sessionDraft.set(chatId, draft)
+      state.sessionDraft.set(chatId, draft)
       await render(chatId, sessionBuilderScreen(draft, await catalog.coaches(), await catalog.courts()))
       return true
     }
     case 'newSlotField': {
-      pending.delete(chatId)
-      const draft = slotDraft.get(chatId) ?? {}
+      state.pending.delete(chatId)
+      const draft = state.slotDraft.get(chatId) ?? {}
       if (waiting.field === 'time') draft.time = text.trim()
       if (waiting.field === 'price') draft.price = digits
       if (waiting.field === 'days') draft.days = Math.min(Math.max(digits, 1), 30)
-      slotDraft.set(chatId, draft)
+      state.slotDraft.set(chatId, draft)
       await render(chatId, slotBuilderScreen(draft, await catalog.courts()))
       return true
     }
     default:
-      pending.delete(chatId)
+      state.pending.delete(chatId)
       return false
   }
 }
@@ -326,7 +341,7 @@ async function meScreen(chatId: number, telegramId: number): Promise<void> {
 
 // ─── Кнопки ─────────────────────────────────────────────────────────────────
 
-async function handleCallback(update: Update): Promise<void> {
+async function handleCallback(update: Update, state: DialogMaps): Promise<void> {
   const query = update.callback_query
   if (!query) return
 
@@ -414,7 +429,7 @@ async function handleCallback(update: Update): Promise<void> {
     case 'prodsub': {
       await answerCallback(query.id)
       const field = action === 'prodprice' ? 'price' : action === 'prodtitle' ? 'title' : 'subtitle'
-      pending.set(chatId, { kind: 'productField', productId: arg, field })
+      state.pending.set(chatId, { kind: 'productField', productId: arg, field })
       const hint =
         field === 'price'
           ? 'Новая цена товара — пришлите число'
@@ -443,7 +458,7 @@ async function handleCallback(update: Update): Promise<void> {
 
     case 'prodphoto':
       await answerCallback(query.id)
-      pending.set(chatId, { kind: 'productPhoto', productId: arg })
+      state.pending.set(chatId, { kind: 'productPhoto', productId: arg })
       await editMessage(
         chatId,
         messageId,
@@ -464,7 +479,7 @@ async function handleCallback(update: Update): Promise<void> {
 
     case 'prodnue':
       await answerCallback(query.id)
-      productDraft.set(chatId, {})
+      state.productDraft.set(chatId, {})
       await render(chatId, newProductScreen({}), messageId)
       return
 
@@ -473,7 +488,7 @@ async function handleCallback(update: Update): Promise<void> {
     case 'newsub': {
       await answerCallback(query.id)
       const field = action === 'newname' ? 'title' : action === 'newprice' ? 'price' : 'subtitle'
-      pending.set(chatId, { kind: 'newProductField', field })
+      state.pending.set(chatId, { kind: 'newProductField', field })
       const hint =
         field === 'title'
           ? 'Название товара'
@@ -497,9 +512,9 @@ async function handleCallback(update: Update): Promise<void> {
         await answerCallback(query.id, 'Категория не найдена')
         return
       }
-      const draft = productDraft.get(chatId) ?? {}
+      const draft = state.productDraft.get(chatId) ?? {}
       draft.category = category
-      productDraft.set(chatId, draft)
+      state.productDraft.set(chatId, draft)
       await answerCallback(query.id, category)
       await render(chatId, newProductScreen(draft), messageId)
       return
@@ -507,7 +522,7 @@ async function handleCallback(update: Update): Promise<void> {
 
     case 'newphoto':
       await answerCallback(query.id)
-      pending.set(chatId, { kind: 'productPhoto', productId: '' })
+      state.pending.set(chatId, { kind: 'productPhoto', productId: '' })
       await editMessage(
         chatId,
         messageId,
@@ -517,7 +532,7 @@ async function handleCallback(update: Update): Promise<void> {
       return
 
     case 'newsave': {
-      const draft = productDraft.get(chatId)
+      const draft = state.productDraft.get(chatId)
       if (!draft?.title || draft.price === undefined || !draft.category) {
         await answerCallback(query.id, 'Заполните название, цену и категорию')
         return
@@ -527,7 +542,7 @@ async function handleCallback(update: Update): Promise<void> {
         adminId,
       )
       if (result.ok && result.id) {
-        productDraft.delete(chatId)
+        state.productDraft.delete(chatId)
         await answerCallback(query.id, result.message)
         await render(chatId, await productCardScreen(result.id), messageId)
         return
@@ -543,7 +558,7 @@ async function handleCallback(update: Update): Promise<void> {
     // ── Расписание: конструктор и карточка занятия ───────────────────────
     case 'sesnue':
       await answerCallback(query.id)
-      sessionDraft.set(chatId, { days: 1, durationMin: 60 })
+      state.sessionDraft.set(chatId, { days: 1, durationMin: 60 })
       await render(chatId, sessionBuilderScreen({ days: 1, durationMin: 60 }, await catalog.coaches(), await catalog.courts()), messageId)
       return
 
@@ -566,7 +581,7 @@ async function handleCallback(update: Update): Promise<void> {
                 : action === 'sesdur'
                   ? 'duration'
                   : 'days'
-      pending.set(chatId, { kind: 'newSessionField', field })
+      state.pending.set(chatId, { kind: 'newSessionField', field })
       const hint =
         field === 'title'
           ? 'Название занятия'
@@ -612,19 +627,19 @@ async function handleCallback(update: Update): Promise<void> {
     case 'seslevelset':
     case 'sescoach':
     case 'sescourt': {
-      const draft = sessionDraft.get(chatId) ?? {}
+      const draft = state.sessionDraft.get(chatId) ?? {}
       if (action === 'sesgroupset') draft.groupIndex = Number(arg)
       if (action === 'seslevelset') draft.levelIndex = Number(arg)
       if (action === 'sescoach') draft.coachId = arg
       if (action === 'sescourt') draft.courtId = arg
-      sessionDraft.set(chatId, draft)
+      state.sessionDraft.set(chatId, draft)
       await answerCallback(query.id)
       await render(chatId, sessionBuilderScreen(draft, await catalog.coaches(), await catalog.courts()), messageId)
       return
     }
 
     case 'sessave': {
-      const draft = sessionDraft.get(chatId)
+      const draft = state.sessionDraft.get(chatId)
       await answerCallback(query.id)
       if (!draft) return
       const result = await catalog.createSession(
@@ -642,7 +657,7 @@ async function handleCallback(update: Update): Promise<void> {
         },
         adminId,
       )
-      if (result.ok) sessionDraft.delete(chatId)
+      if (result.ok) state.sessionDraft.delete(chatId)
       await sendMessage(chatId, result.ok ? `Готово: ${result.message}` : `Не вышло: ${result.message}`)
       await render(chatId, await sessionsScreen(0), messageId)
       return
@@ -673,7 +688,7 @@ async function handleCallback(update: Update): Promise<void> {
     case 'sestime2':
     case 'sesseats2': {
       await answerCallback(query.id)
-      pending.set(chatId, {
+      state.pending.set(chatId, {
         kind: 'sessionField',
         sessionId: arg,
         field: action === 'sessprice2' ? 'price' : action === 'sestime2' ? 'time' : 'seats',
@@ -694,7 +709,7 @@ async function handleCallback(update: Update): Promise<void> {
     // ── Свободная игра: конструктор окон ─────────────────────────────────
     case 'slotnue':
       await answerCallback(query.id)
-      slotDraft.set(chatId, { days: 1 })
+      state.slotDraft.set(chatId, { days: 1 })
       await render(chatId, slotBuilderScreen({ days: 1 }, await catalog.courts()), messageId)
       return
 
@@ -703,7 +718,7 @@ async function handleCallback(update: Update): Promise<void> {
     case 'slotdays': {
       await answerCallback(query.id)
       const field = action === 'slottime' ? 'time' : action === 'slotprice' ? 'price' : 'days'
-      pending.set(chatId, { kind: 'newSlotField', field })
+      state.pending.set(chatId, { kind: 'newSlotField', field })
       const hint =
         field === 'time'
           ? 'Время начала окна, ЧЧ:ММ'
@@ -717,16 +732,16 @@ async function handleCallback(update: Update): Promise<void> {
     }
 
     case 'slotcourt': {
-      const draft = slotDraft.get(chatId) ?? {}
+      const draft = state.slotDraft.get(chatId) ?? {}
       draft.courtId = arg
-      slotDraft.set(chatId, draft)
+      state.slotDraft.set(chatId, draft)
       await answerCallback(query.id)
       await render(chatId, slotBuilderScreen(draft, await catalog.courts()), messageId)
       return
     }
 
     case 'slotsave': {
-      const draft = slotDraft.get(chatId)
+      const draft = state.slotDraft.get(chatId)
       await answerCallback(query.id)
       if (!draft?.time || draft.price === undefined || !draft.courtId) {
         await sendMessage(chatId, 'Заполните время, цену и корт.')
@@ -736,7 +751,7 @@ async function handleCallback(update: Update): Promise<void> {
         { courtId: draft.courtId, start: draft.time, durationMin: 60, price: draft.price, days: draft.days ?? 1 },
         adminId,
       )
-      if (result.ok) slotDraft.delete(chatId)
+      if (result.ok) state.slotDraft.delete(chatId)
       await sendMessage(chatId, result.ok ? `Готово: ${result.message}` : `Не вышло: ${result.message}`)
       await render(chatId, await slotsScreen(0), messageId)
       return
@@ -771,7 +786,7 @@ async function handleCallback(update: Update): Promise<void> {
 
     case 'sessprice':
       await answerCallback(query.id)
-      pending.set(chatId, { kind: 'price', sessionId: arg })
+      state.pending.set(chatId, { kind: 'price', sessionId: arg })
       await render(chatId, await priceHint(arg), messageId)
       return
 
@@ -792,7 +807,7 @@ async function handleCallback(update: Update): Promise<void> {
 
     case 'note':
       await answerCallback(query.id)
-      pending.set(chatId, { kind: 'note', playerId: arg })
+      state.pending.set(chatId, { kind: 'note', playerId: arg })
       await editMessage(
         chatId,
         messageId,
@@ -808,13 +823,10 @@ async function handleCallback(update: Update): Promise<void> {
       return
     }
 
-    case 'repair': {
-      const result = await repairSchema([...SCHEMA, ...SEED])
-      await audit(adminId, 'schema.repair', { statements: result.applied })
-      await answerCallback(query.id, `Схема обновлена: ${result.applied}`)
-      await render(chatId, await menuScreen(), messageId)
+    case 'repair':
+      // Старые сообщения могут содержать кнопку. Не запускаем SEED на живой базе.
+      await answerCallback(query.id, 'Автоматическое восстановление отключено. Обратитесь к разработчику.')
       return
-    }
 
     default:
       await answerCallback(query.id)

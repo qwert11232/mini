@@ -1,9 +1,11 @@
 /**
- * Схема и демо-данные Neon. Один источник правды: отсюда их берут и
- * /api/admin/setup (первичная накатка из браузера), и кнопка «Починить схему»
- * в боте — она досоздаёт недостающие таблицы и колонки на существующей базе.
+ * Схема и демо-данные Neon. Один источник правды: отсюда их берёт
+ * /api/admin/setup (первичная накатка из браузера).
  *
- * Все стейтменты идемпотентны: повторный прогон ничего не ломает.
+ * SCHEMA идемпотентна. SEED на существующей базе может пересчитать starts_at
+ * по day_offset: повторный прогон на рабочей базе требует резервной копии.
+ * Отдельную таблицу состояния бота можно применить без SEED через
+ * /api/admin/migrate-bot-state.
  */
 
 /**
@@ -17,6 +19,18 @@ export const CUSTOMER_SCHEMA = [
   `update users set client_no = nextval('users_client_no_seq') where client_no is null`,
   `alter table orders add column if not exists contact_name text`,
   `alter table orders add column if not exists contact_phone text`,
+]
+
+/** Только новая таблица: не изменяет существующие занятия, окна, брони и заказы. */
+export const BOT_STATE_SCHEMA = [
+  `create table if not exists bot_dialog_state (
+     chat_id bigint primary key,
+     pending jsonb,
+     product_draft jsonb,
+     session_draft jsonb,
+     slot_draft jsonb,
+     updated_at timestamptz not null default now()
+   )`,
 ]
 
 export const SCHEMA = [
@@ -130,6 +144,7 @@ export const SCHEMA = [
      payload jsonb not null default '{}',
      created_at timestamptz not null default now()
    )`,
+  ...BOT_STATE_SCHEMA,
 ]
 
 export const SEED = [

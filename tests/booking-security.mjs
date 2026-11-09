@@ -52,8 +52,9 @@ const { createBooking, cancelBooking, listBookings } = await import('../api/book
 const { createOrder } = await import('../api/orders.ts')
 const { default: client } = await import('../api/client.ts')
 const { default: catalog } = await import('../api/catalog.ts')
-const { createSlots, createSession } = await import('../api/bot/_lib/catalog-admin.ts')
+const { createSlots, createSession, updateSession } = await import('../api/bot/_lib/catalog-admin.ts')
 const { default: webhook } = await import('../api/bot/webhook.ts')
+const { default: migrateBotState } = await import('../api/admin/migrate-bot-state.ts')
 const { default: setup } = await import('../api/bot/setup.ts')
 const secret = createHmac('sha256', 'WebAppData').update(process.env.TELEGRAM_BOT_TOKEN).digest()
 function signed(id = 123456789) {
@@ -99,6 +100,10 @@ const lesson = await createBooking(request('bookings', { ...draft, kind: 'traini
 assert.equal(lesson.status, 201, await lesson.clone().text())
 assert.equal((await createBooking(request('bookings', { ...draft, kind: 'training', sourceId: 'lesson', sourceIds: ['lesson'] }))).status, 409)
 assert.equal((await db.query("select seats_taken from training_sessions where id='lesson'")).rows[0].seats_taken, 1)
+const edited = await updateSession('lesson', { start: '20:00' }, 123)
+assert.equal(edited.ok, true)
+assert.deepEqual((await db.query("select start_time, to_char(starts_at at time zone 'Europe/Moscow', 'HH24:MI') as local_time from training_sessions where id='lesson'")).rows[0], { start_time: '20:00', local_time: '20:00' })
+assert.equal((await updateSession('lesson', { start: '25:00' }, 123)).ok, false)
 await db.exec(`insert into free_slots (id,court_id,day_offset,start_time,duration_min,price,starts_at) values
   ('race1','c',1,'17:00',60,1000,((now() at time zone 'Europe/Moscow')::date + 1 + time '17:00') at time zone 'Europe/Moscow'),
   ('race2','c',1,'18:00',60,1000,((now() at time zone 'Europe/Moscow')::date + 1 + time '18:00') at time zone 'Europe/Moscow')`)
@@ -125,5 +130,94 @@ assert.equal((await webhook.fetch(request('bot/webhook', {}, null))).status, 403
 assert.equal((await setup.fetch(request('bot/setup', null, null, 'GET'))).status, 401)
 process.env.TELEGRAM_WEBHOOK_SECRET = 'test_secret'
 assert.equal((await webhook.fetch(request('bot/webhook', {}, null))).status, 403)
-console.log('✓ PostgreSQL: Telegram, атомарная аренда, соседние окна, цена, отмена и защита от дублей')
+const telegramCalls = []
+const originalFetch = globalThis.fetch
+globalThis.fetch = async (url, init) => {
+  telegramCalls.push({ url: String(url), payload: JSON.parse(init.body) })
+  return Response.json({ ok: true, result: true })
+}
+const adminId = 793536041
+let updateSeq = 100
+function botUpdate(payload) {
+  return new Request('https://example.test/api/bot/webhook', {
+    method: 'POST',
+    headers: { 'x-telegram-bot-api-secret-token': 'test_secret' },
+    body: JSON.stringify({ update_id: updateSeq++, ...payload }),
+  })
+}
+function adminCallback(data) {
+  return {
+    callback_query: {
+      id: `callback-${updateSeq}`,
+      from: { id: adminId, first_name: 'Admin' },
+      data,
+      message: { message_id: 1, chat: { id: adminId, type: 'private' } },
+    },
+  }
+}
+function adminMessage(text) {
+  return {
+    message: {
+      message_id: 2,
+      from: { id: adminId, first_name: 'Admin' },
+      chat: { id: adminId, type: 'private' },
+      text,
+    },
+  }
+}
+async function botStep(payload) {
+  const response = await webhook.fetch(botUpdate(payload))
+  assert.equal(response.status, 200)
+}
+
+const beforeRepair = await db.query('select count(*)::int as count from training_sessions')
+await botStep(adminCallback('repair'))
+assert.ok(telegramCalls.some(({ payload }) => payload.text?.includes('отключено')))
+assert.deepEqual(await db.query('select count(*)::int as count from training_sessions'), beforeRepair)
+
+// Каждый вызов webhook загружает состояние из БД: эмуляция разных Vercel-инстансов.
+// Продолжаем один черновик без повторного sesnue: шаги не должны теряться.
+await botStep(adminCallback('sesnue'))
+for (const [callback, text] of [
+  ['sesname', 'Тренировка'],
+  ['sesprice', '2500'],
+  ['sesseats', '4'],
+  ['sesdur', '65'],
+  ['sesdays', '7'],
+]) {
+  await botStep(adminCallback(callback))
+  await botStep(adminMessage(text))
+}
+const [stateRow] = (await db.query('select session_draft as draft, pending from bot_dialog_state where chat_id = $1', [adminId])).rows
+assert.deepEqual(stateRow.draft, { days: 7, durationMin: 65, price: 2500, seats: 4, title: 'Тренировка' })
+assert.equal(stateRow.pending, null)
+
+await updateSession('lesson', { start: '18:00' }, 123)
+await botStep(adminCallback('sestime2:lesson'))
+await botStep(adminMessage('20:00'))
+assert.deepEqual(
+  (await db.query("select start_time, to_char(starts_at at time zone 'Europe/Moscow', 'HH24:MI') as local_time from training_sessions where id='lesson'")).rows[0],
+  { start_time: '20:00', local_time: '20:00' },
+)
+assert.equal((await db.query('select pending from bot_dialog_state where chat_id = $1', [adminId])).rows[0].pending, null)
+
+process.env.SETUP_TOKEN = 'migration-token'
+const deniedMigration = await migrateBotState.fetch(new Request('https://example.test/api/admin/migrate-bot-state', { method: 'GET' }))
+assert.equal(deniedMigration.status, 401)
+const migration = await migrateBotState.fetch(new Request('https://example.test/api/admin/migrate-bot-state?token=migration-token', { method: 'GET' }))
+assert.equal(migration.status, 200)
+const migrationResult = await migration.json()
+assert.equal(migrationResult.ok, true)
+assert.equal(migrationResult.applied, 1)
+assert.ok(String(migrationResult.table).includes('bot_dialog_state'))
+
+await db.exec('drop table bot_dialog_state')
+telegramCalls.length = 0
+await botStep(adminCallback('menu'))
+assert.ok(telegramCalls.some(({ payload }) => payload.text?.includes('migrate-bot-state')))
+const restored = await migrateBotState.fetch(new Request('https://example.test/api/admin/migrate-bot-state?token=migration-token', { method: 'GET' }))
+assert.equal(restored.status, 200)
+
+globalThis.fetch = originalFetch
+console.log('✓ PostgreSQL: Telegram, атомарная аренда, соседние окна, цена, отмена, защита от дублей и состояние бота')
 await db.close()
