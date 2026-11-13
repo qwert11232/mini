@@ -87,6 +87,8 @@ export async function createBooking(request: Request): Promise<Response> {
         join courts c on c.id = f.court_id and c.is_active
         where f.id in (select jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb))
           and f.is_active and f.starts_at > now()
+          -- Старые ручные действия могли оставить активную бронь у открытого окна.
+          and not exists (select 1 from bookings b where b.kind = 'free' and b.source_id = f.id and b.status = 'active')
           and f.starts_at < ((now() at time zone 'Europe/Moscow')::date + 30)::timestamp at time zone 'Europe/Moscow'
         order by f.id for update of f
       ), ordered as materialized (
@@ -156,10 +158,12 @@ export async function cancelBooking(request: Request): Promise<Response> {
         update bookings b set status = 'cancelled', cancelled_at = now()
         from users u
         where b.id = ${id} and u.id = b.user_id and u.telegram_id = ${user.id} and b.status = 'active'
-        returning b.kind, b.source_id
+        returning b.id, b.kind, b.source_id
       ), released_slot as (
         update free_slots f set is_active = true from cancelled c
-        where c.kind = 'free' and f.id = c.source_id returning f.id
+        where c.kind = 'free' and f.id = c.source_id
+          and not exists (select 1 from bookings b where b.kind = 'free' and b.source_id = f.id and b.status = 'active' and b.id <> c.id)
+        returning f.id
       ), released_seat as (
         update training_sessions s set seats_taken = greatest(s.seats_taken - 1, 0) from cancelled c
         where c.kind = 'training' and s.id = c.source_id returning s.id

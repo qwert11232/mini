@@ -88,7 +88,8 @@ function migrationHint(error: unknown): Error {
   if (/bot_dialog_state/i.test(reason) && /(does not exist|relation|не существует)/i.test(reason)) {
     return new Error(
       'Не применена миграция bot_dialog_state. Сделайте резервную копию базы и вызовите ' +
-        '/api/admin/migrate-bot-state?token=... со значением SETUP_TOKEN, затем повторите действие.',
+        '/api/admin/migrate-bot-state?token=... с ADMIN_SETUP_TOKEN, если он задан, ' +
+        'иначе с SETUP_TOKEN. Не отправляйте токен в чат.',
     )
   }
   return error instanceof Error ? error : new Error(reason)
@@ -149,7 +150,7 @@ export async function loadDialogState(chatId: number): Promise<DialogState> {
              product_draft as "productDraft",
              session_draft as "sessionDraft",
              slot_draft as "slotDraft"
-      from bot_dialog_state
+      from public.bot_dialog_state
       where chat_id = ${chatId}
     `) as unknown as StateRow[]
     const row = rows[0]
@@ -168,7 +169,7 @@ export async function saveDialogState(chatId: number, state: DialogState): Promi
   const sql = getDb()
   try {
     await sql`
-      insert into bot_dialog_state
+      insert into public.bot_dialog_state
         (chat_id, pending, product_draft, session_draft, slot_draft, updated_at)
       values (
         ${chatId},

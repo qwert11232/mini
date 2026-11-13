@@ -4,11 +4,11 @@ import { BOT_STATE_SCHEMA } from '../_lib/schema.js'
 /**
  * GET/POST /api/admin/migrate-bot-state — безопасная миграция для админ-бота.
  *
- *   https://<домен>/api/admin/migrate-bot-state?token=<SETUP_TOKEN_или_ADMIN_SETUP_TOKEN>
+ *   https://<домен>/api/admin/migrate-bot-state?token=<ТОКЕН_ПО_ПРИОРИТЕТУ>
  *
  * Создаёт только новую таблицу bot_dialog_state. Не запускает SEED, не меняет
- * даты занятий/окон и не удаляет брони, заказы или товары. Доступ закрыт
- * SETUP_TOKEN или ADMIN_SETUP_TOKEN — так же, как /api/admin/setup.
+ * даты занятий/окон и не удаляет брони, заказы или товары. Если задан
+ * ADMIN_SETUP_TOKEN, нужен именно он; иначе используется SETUP_TOKEN.
  */
 
 async function handler(request: Request): Promise<Response> {

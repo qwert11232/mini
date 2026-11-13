@@ -21,9 +21,14 @@ export const CUSTOMER_SCHEMA = [
   `alter table orders add column if not exists contact_phone text`,
 ]
 
-/** Только новая таблица: не изменяет существующие занятия, окна, брони и заказы. */
+/**
+ * Только новая таблица: не изменяет занятия, окна, брони и заказы.
+ * Намеренно не добавлена в db/schema.sql: изменение этого файла запускает
+ * GitHub Actions на main. Дубликат для ручного применения —
+ * migrations/001_bot_dialog_state.sql; применять только после резервной копии.
+ */
 export const BOT_STATE_SCHEMA = [
-  `create table if not exists bot_dialog_state (
+  `create table if not exists public.bot_dialog_state (
      chat_id bigint primary key,
      pending jsonb,
      product_draft jsonb,

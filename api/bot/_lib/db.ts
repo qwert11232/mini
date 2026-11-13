@@ -18,24 +18,8 @@ export function getDb(): Sql {
   return cached
 }
 
-/** Админ проверяется по списку ID из окружения; по умолчанию — владелец клуба. */
-const DEFAULT_ADMIN_IDS = '793536041'
-
-export function adminIds(): string[] {
-  return (process.env.ADMIN_TELEGRAM_IDS ?? DEFAULT_ADMIN_IDS)
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
-}
-
-export function isAdmin(telegramId: number, username?: string): boolean {
-  if (adminIds().includes(String(telegramId))) return true
-  const usernames = (process.env.ADMIN_TELEGRAM_USERNAMES ?? '')
-    .split(',')
-    .map((value) => value.trim().replace(/^@/, '').toLowerCase())
-    .filter(Boolean)
-  return Boolean(username && usernames.includes(username.toLowerCase()))
-}
+// Общая проверка ID используется и ботом, и Mini App.
+export { adminIds, isAdminId as isAdmin } from '../../_lib/admin-access.js'
 
 export async function audit(telegramId: number, action: string, payload: Record<string, unknown>) {
   const sql = getDb()
@@ -43,6 +27,17 @@ export async function audit(telegramId: number, action: string, payload: Record<
     insert into admin_audit (telegram_id, action, payload)
     values (${telegramId}, ${action}, ${JSON.stringify(payload)}::jsonb)
   `
+}
+
+/** Дата клуба для экранов, независимо от таймзоны сервера. */
+export function clubDate(offset: number): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date())
+  const part = (type: string): number => Number(parts.find((item) => item.type === type)?.value ?? 0)
+  const date = new Date(Date.UTC(part('year'), part('month') - 1, part('day') + offset))
+  const weekdays = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб']
+  return `${String(date.getUTCDate()).padStart(2, '0')}.${String(date.getUTCMonth() + 1).padStart(2, '0')}, ${weekdays[date.getUTCDay()]}`
 }
 
 /** Дата в московском времени — клуб работает по нему, независимо от часового пояса читающего. */

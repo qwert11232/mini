@@ -1,18 +1,20 @@
-import { audit, getDb, isAdmin } from './_lib/db.js'
+import { isAdmin } from './_lib/db.js'
 import {
   answerCallback,
   editMessage,
   sendMessage,
   webhookSecret,
+  type TelegramUser,
   type Update,
 } from './_lib/telegram.js'
 import {
   cancelBooking,
   markIssued,
-  shiftSeats,
+  cancelManualSeat,
 } from './_lib/bookings.js'
 import {
   closeSlot,
+  bookingDayOffset,
   markVisited,
   openSlot,
   reserveSeat,
@@ -25,7 +27,6 @@ import {
 } from './_lib/admin.js'
 import * as catalog from './_lib/catalog-admin.js'
 import {
-  appUrl,
   auditScreen,
   courtsScreen,
   dayScreen,
@@ -55,21 +56,28 @@ import {
   type DialogMaps,
   type Pending,
 } from './_lib/state.js'
+import {
+  cancelOwnBooking,
+  userAboutScreen,
+  userBookingsScreen,
+  userCancelScreen,
+  userHelpScreen,
+  userHomeScreen,
+  userOrdersScreen,
+  userScheduleScreen,
+} from './_lib/user-screens.js'
 
-const HELP = [
-  '<b>ДТ · бот клуба</b>',
-  '',
-  '/start — панель администратора',
-  '/today — записи на сегодня',
-  '/tomorrow — записи на завтра',
-  '/schedule — расписание занятий',
-  '/orders — заказы к выдаче',
-  '/me — мои записи',
-  '/help — эта справка',
-  '',
-  'Записаться на занятие и арендовать корт можно в приложении.',
-].join('\n')
+type BotRole = 'admin' | 'player'
 
+const ADMIN_ONLY_COMMANDS = new Set(['/today', '/tomorrow', '/admin'])
+
+function roleOf(from: TelegramUser): BotRole {
+  return isAdmin(from.id) ? 'admin' : 'player'
+}
+
+function isUserAction(data: string): boolean {
+  return data.startsWith('u:')
+}
 
 async function handler(request: Request): Promise<Response> {
   if (request.method !== 'POST') {
@@ -94,38 +102,50 @@ async function handler(request: Request): Promise<Response> {
   }
 
   const from = update.callback_query?.from ?? update.message?.from
-  const chatId = update.callback_query?.message?.chat.id ?? update.message?.chat.id
-  const admin = from ? isAdmin(from.id, from.username) : false
+  const chat = update.callback_query?.message?.chat ?? update.message?.chat
 
   try {
-    if (!chatId) {
-      // Callback без сообщения (например, inline-режим) всё равно нужно закрыть.
+    if (!from || !Number.isSafeInteger(from.id) || from.id <= 0 || from.is_bot || !chat) {
       if (update.callback_query) await answerCallback(update.callback_query.id)
       return new Response('ok', { status: 200 })
     }
 
-    // Гостям таблица состояния не нужна: их сообщения не запускают конструкторы.
-    if (!admin) {
-      await safe(chatId, async () => {
+    // Персональные данные и админ-панель нельзя показывать в группах. Кнопки
+    // web_app Telegram тоже разрешает только в личном чате пользователя с ботом.
+    if (chat.type !== 'private' || chat.id !== from.id) {
+      if (update.callback_query) {
+        await answerCallback(update.callback_query.id, 'Откройте бота в личном чате')
+      } else if (chat.type !== 'private' && update.message?.text?.trim().startsWith('/')) {
+        await sendMessage(chat.id, 'Пожалуйста, откройте бота в личном чате.')
+      }
+      return new Response('ok', { status: 200 })
+    }
+
+    const role = roleOf(from)
+    const callbackId = update.callback_query?.id
+
+    // Игрокам таблица черновиков администратора не нужна.
+    if (role === 'player') {
+      await safe(chat.id, role, callbackId, async () => {
         const state = stateMaps(emptyDialog())
-        if (update.callback_query) await handleCallback(update, state)
-        else if (update.message) await handleMessage(update, state)
+        if (update.callback_query) await handleCallback(update, state, role)
+        else if (update.message) await handleMessage(update, state, role)
       })
       return new Response('ok', { status: 200 })
     }
 
-    await safe(chatId, async () => {
-      const dialog = await loadDialogState(chatId)
+    await safe(chat.id, role, callbackId, async () => {
+      const dialog = await loadDialogState(chat.id)
       const state = stateMaps(dialog)
       let failure: unknown = null
       try {
-        if (update.callback_query) await handleCallback(update, state)
-        else if (update.message) await handleMessage(update, state)
+        if (update.callback_query) await handleCallback(update, state, role)
+        else if (update.message) await handleMessage(update, state, role)
       } catch (error) {
         // Состояние сохраняем даже при ошибке экрана: шаги не должны теряться.
         failure = error
       }
-      await saveDialogState(chatId, dialog)
+      await saveDialogState(chat.id, dialog)
       if (failure) throw failure
     })
   } catch (error) {
@@ -136,73 +156,113 @@ async function handler(request: Request): Promise<Response> {
   return new Response('ok', { status: 200 })
 }
 
-/**
- * Раньше ошибка «база не подключена» уходила только в лог, а Telegram получал 200 —
- * в чате была тишина. Теперь админ видит причину и ссылку на диагностику.
- */
-async function safe(chatId: number | undefined, work: () => Promise<void>): Promise<void> {
+/** Пользователю не показываем технические детали БД и подсказки администратора. */
+async function safe(chatId: number, role: BotRole, callbackId: string | undefined, work: () => Promise<void>): Promise<void> {
   try {
     await work()
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     console.error('[bot] ошибка', reason)
-    if (!chatId) return
-    const screen = await dbErrorScreen(reason)
+    if (callbackId) {
+      try {
+        await answerCallback(callbackId, 'Не удалось выполнить действие. Попробуйте позже.')
+      } catch {
+        // Попытаемся хотя бы отправить сообщение в чат.
+      }
+    }
+    const screen = role === 'admin'
+      ? await dbErrorScreen(reason)
+      : {
+          text: '<b>Временно недоступно</b>\n\nНе удалось получить данные. Попробуйте ещё раз позже.',
+          keyboard: { inline_keyboard: [[{ text: '‹ Меню', callback_data: 'u:home' }]] },
+        }
     await sendMessage(chatId, screen.text, screen.keyboard)
   }
 }
 
 // ─── Сообщения ──────────────────────────────────────────────────────────────
 
-async function handleMessage(update: Update, state: DialogMaps): Promise<void> {
+async function handleMessage(update: Update, state: DialogMaps, role: BotRole): Promise<void> {
   const message = update.message
   const from = message?.from
   if (!message || !from) return
 
-  // Фото от админа: обложка товара (в карточке товара или в конструкторе).
+  const chatId = message.chat.id
+  const admin = role === 'admin'
   const photo = message.photo?.[message.photo.length - 1]
-  if (photo && isAdmin(from.id, from.username)) {
-    const waiting = state.pending.get(message.chat.id)
-    state.pending.delete(message.chat.id)
-    const target = waiting?.kind === 'productPhoto' ? waiting.productId : null
-    if (target) {
-      const result = await catalog.setProductPhoto(target, photo, from.id)
-      await answer(message.chat.id, result, await productCardScreen(target))
+
+  // Фото от админа: обложка товара (в карточке товара или в конструкторе).
+  // Игроку нельзя даже случайно перевести диалог в админский сценарий.
+  if (photo) {
+    if (!admin) {
+      await render(chatId, userHomeScreen(from.first_name, 'Фото принимаются только от администратора.'))
       return
     }
-    await sendMessage(message.chat.id, 'Фото получено, но не выбрано, куда его поставить. Откройте товар → «📷 Фото».')
+    const waiting = state.pending.get(chatId)
+    if (waiting?.kind !== 'productPhoto') {
+      await sendMessage(chatId, waiting
+        ? 'Сейчас ожидается текст. Для отмены нажмите кнопку «Отмена» или отправьте /start.'
+        : 'Фото получено, но не выбрано, куда его поставить. Откройте товар → «📷 Фото».')
+      return
+    }
+    if (waiting.productId) {
+      const result = await catalog.setProductPhoto(waiting.productId, photo, from.id)
+      if (!result.ok) {
+        await sendMessage(chatId, `Не вышло: ${result.message}. Попробуйте другое фото.`)
+        return
+      }
+      state.pending.delete(chatId)
+      await answer(chatId, result, await productCardScreen(waiting.productId))
+      return
+    }
+    const prepared = await catalog.prepareProductPhoto(photo)
+    if (!prepared.ok) {
+      await sendMessage(chatId, `Не вышло: ${prepared.message}. Попробуйте другое фото.`)
+      return
+    }
+    const draft = state.productDraft.get(chatId) ?? {}
+    draft.image = prepared.image
+    state.productDraft.set(chatId, draft)
+    state.pending.delete(chatId)
+    await render(chatId, newProductScreen(draft))
     return
   }
 
-  const chatId = message.chat.id
-  const admin = isAdmin(from.id, from.username)
   const text = (message.text ?? '').trim()
   const command = text.split(/\s+/)[0]?.replace(/@.*$/, '').toLowerCase() ?? ''
 
-  // Текстовый ввод от админа: цена, заметка, поля товара или занятия.
+  // Текстовый ввод админа: цена, заметка, поля товара или занятия.
   const waiting = state.pending.get(chatId)
   if (waiting && admin && (await handleText(chatId, from.id, waiting, text, state))) return
 
   if (command === '/start') {
-    if (admin) {
-      await render(chatId, await menuScreen())
-    } else {
-      await sendMessage(chatId, HELP, {
-        inline_keyboard: [[{ text: '🎾 Открыть приложение', url: appUrl() }]],
-      })
-    }
+    await render(chatId, admin ? await menuScreen() : userHomeScreen(from.first_name))
     return
   }
 
   if (command === '/me') {
-    await meScreen(chatId, from.id)
+    await render(chatId, await userBookingsScreen(from.id, admin))
     return
   }
 
   if (!admin) {
-    await sendMessage(chatId, 'Это бот клуба. Записи и аренда — в приложении.', {
-      inline_keyboard: [[{ text: '🎾 Открыть приложение', url: appUrl() }]],
-    })
+    if (command === '/schedule') {
+      await render(chatId, await userScheduleScreen(0, false))
+      return
+    }
+    if (command === '/help') {
+      await render(chatId, userHelpScreen(false))
+      return
+    }
+    if (command === '/orders') {
+      await render(chatId, await userOrdersScreen(from.id))
+      return
+    }
+    if (ADMIN_ONLY_COMMANDS.has(command)) {
+      await render(chatId, userHomeScreen(from.first_name, 'Эта команда доступна только администратору клуба.'))
+      return
+    }
+    await render(chatId, userHomeScreen(from.first_name, 'Не понял сообщение. Напишите /help или выберите кнопку.'))
     return
   }
 
@@ -222,9 +282,40 @@ async function handleMessage(update: Update, state: DialogMaps): Promise<void> {
     case '/help':
       await render(chatId, await helpScreen())
       break
+    case '/admin':
+      await render(chatId, await menuScreen())
+      break
     default:
       await render(chatId, await menuScreen())
   }
+}
+
+/** Проверяем поле до изменения черновика; неверный ответ можно прислать повторно. */
+function inputError(waiting: Pending, text: string): string | null {
+  if (waiting.kind === 'productPhoto') return 'Пришлите фото или нажмите «Отмена».'
+  if (waiting.kind === 'note') {
+    return text.trim() && text.length <= 500 ? null : 'Заметка должна содержать от 1 до 500 символов.'
+  }
+  const field = waiting.kind === 'price' ? 'price' : 'field' in waiting ? waiting.field : null
+  if (field === 'title' && (!text.trim() || text.trim().length > 120)) return 'Название: от 1 до 120 символов.'
+  if (field === 'subtitle' && text.length > 160) return 'Описание: не более 160 символов.'
+  if (field === 'time' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(text.trim())) return 'Введите время в формате ЧЧ:ММ.'
+
+  const ranges = {
+    price: [0, 200000],
+    seats: [1, 40],
+    duration: [15, 240],
+    days: [1, 30],
+  } as const
+  if (field && field in ranges) {
+    const compact = text.replace(/\s/g, '')
+    const [min, max] = ranges[field as keyof typeof ranges]
+    const value = Number(compact)
+    if (!/^\d+$/.test(compact) || !Number.isSafeInteger(value) || value < min || value > max) {
+      return `Введите целое число от ${min} до ${max}.`
+    }
+  }
+  return null
 }
 
 /**
@@ -237,12 +328,17 @@ async function handleText(chatId: number, adminId: number, waiting: Pending, tex
     return false
   }
 
-  const digits = Number(text.replace(/[^\d]/g, ''))
+  const error = inputError(waiting, text)
+  if (error) {
+    await sendMessage(chatId, error)
+    return true
+  }
+  const digits = Number(text.replace(/\s/g, ''))
 
   switch (waiting.kind) {
     case 'price': {
       state.pending.delete(chatId)
-      await answer(chatId, await setSessionPrice(waiting.sessionId, digits, adminId), await sessionsScreen(0))
+      await answer(chatId, await setSessionPrice(waiting.sessionId, digits, adminId), await sessionListFor(waiting.sessionId))
       return true
     }
     case 'note': {
@@ -260,7 +356,7 @@ async function handleText(chatId: number, adminId: number, waiting: Pending, tex
             : waiting.field === 'seats'
               ? { seatsTotal: digits }
               : { durationMin: digits }
-      await answer(chatId, await catalog.updateSession(waiting.sessionId, patch, adminId), await sessionsScreen(0))
+      await answer(chatId, await catalog.updateSession(waiting.sessionId, patch, adminId), await sessionListFor(waiting.sessionId))
       return true
     }
     case 'productField': {
@@ -317,31 +413,9 @@ async function handleText(chatId: number, adminId: number, waiting: Pending, tex
   }
 }
 
-/** Мои записи — читается без админских прав. */
-async function meScreen(chatId: number, telegramId: number): Promise<void> {
-  const sql = getDb()
-  const rows = (await sql`
-    select b.title, b.status,
-           to_char(b.starts_at at time zone 'Europe/Moscow', 'DD.MM в HH24:MI') as start
-    from bookings b
-    join users u on u.id = b.user_id
-    where u.telegram_id = ${telegramId} and b.status = 'active'
-    order by b.starts_at
-    limit 5
-  `) as unknown as { title: string; start: string }[]
-  if (rows.length === 0) {
-    await sendMessage(chatId, 'Активных записей нет. Возьмите корт или запишитесь на занятие в приложении.', {
-      inline_keyboard: [[{ text: '🎾 Открыть приложение', url: appUrl() }]],
-    })
-    return
-  }
-  const lines = rows.map((row) => `• ${row.start} — ${row.title}`)
-  await sendMessage(chatId, [`<b>Ваши записи</b>`, '', ...lines].join('\n'))
-}
-
 // ─── Кнопки ─────────────────────────────────────────────────────────────────
 
-async function handleCallback(update: Update, state: DialogMaps): Promise<void> {
+async function handleCallback(update: Update, state: DialogMaps, role: BotRole): Promise<void> {
   const query = update.callback_query
   if (!query) return
 
@@ -349,12 +423,18 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
   const messageId = query.message?.message_id
   const data = query.data ?? ''
 
-  if (!isAdmin(query.from.id, query.from.username)) {
+  // Роль получена по Telegram ID на этом update, а не из callback_data.
+  if (role !== 'admin' && !isUserAction(data)) {
     await answerCallback(query.id, 'Раздел доступен администратору клуба')
     return
   }
   if (!chatId || !messageId) {
     await answerCallback(query.id)
+    return
+  }
+  if (role === 'admin') state.pending.delete(chatId)
+  if (isUserAction(data)) {
+    await handleUserCallback(query, chatId, messageId, role)
     return
   }
 
@@ -442,7 +522,7 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
 
     case 'prodcat': {
       await answerCallback(query.id)
-      await render(chatId, categoryPickScreen(`prodcatset:${arg}`), messageId)
+      await render(chatId, categoryPickScreen(`prodcatset:${arg}`, `prodedit:${arg}`), messageId)
       return
     }
 
@@ -483,6 +563,11 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
       await render(chatId, newProductScreen({}), messageId)
       return
 
+    case 'prodresume':
+      await answerCallback(query.id)
+      await render(chatId, newProductScreen(state.productDraft.get(chatId) ?? {}), messageId)
+      return
+
     case 'newname':
     case 'newprice':
     case 'newsub': {
@@ -496,14 +581,14 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
             ? 'Цена товара — число'
             : 'Короткое описание (необязательно)'
       await editMessage(chatId, messageId, `<b>${hint}</b>\n\nПришлите значение сообщением.`, {
-        inline_keyboard: [[{ text: '‹ Отмена', callback_data: 'prodnue' }]],
+        inline_keyboard: [[{ text: '‹ Отмена', callback_data: 'prodresume' }]],
       })
       return
     }
 
     case 'newcat':
       await answerCallback(query.id)
-      await render(chatId, categoryPickScreen('newcatset'), messageId)
+      await render(chatId, categoryPickScreen('newcatset', 'prodresume'), messageId)
       return
 
     case 'newcatset': {
@@ -527,7 +612,7 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
         chatId,
         messageId,
         '<b>Фото товара</b>\n\nПришлите картинку в чат — она привяжется, когда вы сохраните товар.',
-        { inline_keyboard: [[{ text: '‹ К товару', callback_data: 'prodnue' }]] },
+        { inline_keyboard: [[{ text: '‹ К товару', callback_data: 'prodresume' }]] },
       )
       return
 
@@ -538,7 +623,7 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
         return
       }
       const result = await catalog.createProduct(
-        { title: draft.title, subtitle: draft.subtitle, category: draft.category, price: draft.price },
+        { title: draft.title, subtitle: draft.subtitle, category: draft.category, price: draft.price, image: draft.image },
         adminId,
       )
       if (result.ok && result.id) {
@@ -560,6 +645,11 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
       await answerCallback(query.id)
       state.sessionDraft.set(chatId, { days: 1, durationMin: 60 })
       await render(chatId, sessionBuilderScreen({ days: 1, durationMin: 60 }, await catalog.coaches(), await catalog.courts()), messageId)
+      return
+
+    case 'sesresume':
+      await answerCallback(query.id)
+      await render(chatId, sessionBuilderScreen(state.sessionDraft.get(chatId) ?? {}, await catalog.coaches(), await catalog.courts()), messageId)
       return
 
     case 'sesname':
@@ -595,7 +685,7 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
                   ? 'Длительность в минутах'
                   : 'На сколько дней вперёд поставить (1–30)'
       await editMessage(chatId, messageId, `<b>${hint}</b>\n\nПришлите значение сообщением.`, {
-        inline_keyboard: [[{ text: '‹ Отмена', callback_data: 'sessions:0' }]],
+        inline_keyboard: [[{ text: '‹ Отмена', callback_data: 'sesresume' }]],
       })
       return
     }
@@ -614,7 +704,7 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
               ...items.map((item, index) => [
                 { text: item, callback_data: `${isGroup ? 'sesgroupset' : 'seslevelset'}:${index}` },
               ]),
-              [{ text: '‹ Назад', callback_data: 'sessions:0' }],
+              [{ text: '‹ Назад', callback_data: 'sesresume' }],
             ],
           },
         },
@@ -679,10 +769,12 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
     }
 
     case 'sestoggle':
-      return change(() => catalog.toggleSession(arg, adminId), async () => sessionsScreen(0))
+      return change(() => catalog.toggleSession(arg, adminId), () => sessionListFor(arg))
 
-    case 'sesdel':
-      return change(() => catalog.deleteSession(arg, adminId), async () => sessionsScreen(0))
+    case 'sesdel': {
+      const offset = (await catalog.sessionById(arg))?.dayOffset ?? 0
+      return change(() => catalog.deleteSession(arg, adminId), () => sessionsScreen(offset))
+    }
 
     case 'sessprice2':
     case 'sestime2':
@@ -713,6 +805,11 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
       await render(chatId, slotBuilderScreen({ days: 1 }, await catalog.courts()), messageId)
       return
 
+    case 'slotresume':
+      await answerCallback(query.id)
+      await render(chatId, slotBuilderScreen(state.slotDraft.get(chatId) ?? {}, await catalog.courts()), messageId)
+      return
+
     case 'slottime':
     case 'slotprice':
     case 'slotdays': {
@@ -726,7 +823,7 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
             ? 'Цена аренды — число'
             : 'На сколько дней вперёд (1–30)'
       await editMessage(chatId, messageId, `<b>${hint}</b>\n\nПришлите значение сообщением.`, {
-        inline_keyboard: [[{ text: '‹ Отмена', callback_data: 'slots:0' }]],
+        inline_keyboard: [[{ text: '‹ Отмена', callback_data: 'slotresume' }]],
       })
       return
     }
@@ -761,8 +858,10 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
       await answerCallback(query.id, 'Заполните время, цену и корт')
       return
 
-    case 'slotdel':
-      return change(() => catalog.deleteSlot(arg, adminId), async () => slotsScreen(0))
+    case 'slotdel': {
+      const offset = (await catalog.slotDayOffset(arg)) ?? 0
+      return change(() => catalog.deleteSlot(arg, adminId), () => slotsScreen(offset))
+    }
 
     case 'audit':
       await answerCallback(query.id)
@@ -770,19 +869,17 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
       return
 
     case 'cancel':
-      return change(() => cancelBooking(arg, adminId), async () => dayScreen(0))
+      return change(() => cancelBooking(arg, adminId), () => dayForBooking(arg))
 
     case 'visited':
-      return change(() => markVisited(arg, adminId), async () => dayScreen(0))
+      return change(() => markVisited(arg, adminId), () => dayForBooking(arg))
 
     case 'seats':
-    case 'seatplus': {
-      const delta = action === 'seatplus' ? 1 : -1
-      return change(() => shiftSeats(arg, delta, adminId), async () => sessionsScreen(0))
-    }
+      return change(() => cancelManualSeat(arg, adminId), () => sessionListFor(arg))
 
+    case 'seatplus':
     case 'seatreserve':
-      return change(() => reserveSeat(arg, adminId), async () => sessionsScreen(0))
+      return change(() => reserveSeat(arg, adminId), () => sessionListFor(arg))
 
     case 'sessprice':
       await answerCallback(query.id)
@@ -791,16 +888,16 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
       return
 
     case 'slotclose':
-      return change(() => closeSlot(arg, adminId), async () => slotsScreen(0))
+      return change(() => closeSlot(arg, adminId), () => slotsFor(arg))
 
     case 'slotopen':
-      return change(() => openSlot(arg, adminId), async () => slotsScreen(0))
+      return change(() => openSlot(arg, adminId), () => slotsFor(arg))
 
     case 'issued':
       return change(() => markIssued(arg, adminId), async () => ordersScreen())
 
     case 'restore':
-      return change(() => restoreBooking(arg, adminId), async () => dayScreen(0))
+      return change(() => restoreBooking(arg, adminId), () => dayForBooking(arg))
 
     case 'prodtoggle':
       return change(() => toggleProduct(arg, adminId), async () => productListScreen())
@@ -818,7 +915,7 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
 
     case 'role': {
       const result = await setRole(arg, 'coach')
-      await answerCallback(query.id, result.ok ? 'Роль: тренер' : result.message)
+      await answerCallback(query.id, result.ok ? 'Отметка: тренер (без прав администратора)' : result.message)
       await render(chatId, await usersScreen(), messageId)
       return
     }
@@ -832,6 +929,75 @@ async function handleCallback(update: Update, state: DialogMaps): Promise<void> 
       await answerCallback(query.id)
       await render(chatId, await menuScreen(), messageId)
   }
+}
+
+async function handleUserCallback(
+  query: NonNullable<Update['callback_query']>,
+  chatId: number,
+  messageId: number | undefined,
+  role: BotRole,
+): Promise<void> {
+  const [, action = '', arg = ''] = (query.data ?? '').split(':')
+  const adminPreview = role === 'admin'
+  const show = async (screen: Screen, text?: string): Promise<void> => {
+    await answerCallback(query.id, text)
+    await render(chatId, screen, messageId)
+  }
+
+  switch (action) {
+    case 'home':
+      await show(userHomeScreen(query.from.first_name, undefined, adminPreview))
+      return
+    case 'admin':
+      if (adminPreview) {
+        await show(await menuScreen())
+      } else {
+        await answerCallback(query.id, 'Раздел доступен администратору клуба')
+      }
+      return
+    case 'help':
+      await show(userHelpScreen(adminPreview))
+      return
+    case 'about':
+      await show(userAboutScreen(adminPreview))
+      return
+    case 'schedule':
+      await show(await userScheduleScreen(Number(arg || 0), adminPreview))
+      return
+    case 'me':
+      await show(await userBookingsScreen(query.from.id, adminPreview))
+      return
+    case 'orders':
+      await show(await userOrdersScreen(query.from.id, adminPreview))
+      return
+    case 'cancelask':
+      await show(await userCancelScreen(arg, query.from.id, adminPreview))
+      return
+    case 'cancel': {
+      const result = await cancelOwnBooking(arg, query.from.id)
+      await show(
+        await userBookingsScreen(query.from.id, adminPreview, result.ok ? 'Запись отменена.' : result.message),
+        result.ok ? 'Запись отменена' : result.message,
+      )
+      return
+    }
+    default:
+      await show(userHomeScreen(query.from.first_name, 'Раздел не найден.', adminPreview), 'Раздел не найден')
+  }
+}
+
+/** После изменения остаёмся на той же дате, а не перескакиваем на сегодня. */
+async function sessionListFor(sessionId: string): Promise<Screen> {
+  const session = await catalog.sessionById(sessionId)
+  return sessionsScreen(session?.dayOffset ?? 0)
+}
+
+async function slotsFor(slotId: string): Promise<Screen> {
+  return slotsScreen((await catalog.slotDayOffset(slotId)) ?? 0)
+}
+
+async function dayForBooking(bookingId: string): Promise<Screen> {
+  return dayScreen((await bookingDayOffset(bookingId)) ?? 0)
 }
 
 /** Ответ после текстового ввода: короткое подтверждение + экран. */

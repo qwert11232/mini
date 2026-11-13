@@ -11,7 +11,7 @@ import { SCHEMA, SEED } from '../_lib/schema.js'
  * SCHEMA идемпотентна. SEED при повторном вызове на рабочей базе может сдвинуть
  * starts_at существующих занятий и окон: запускать только после резервной копии.
  * Для миграции состояния бота есть отдельный /api/admin/migrate-bot-state без SEED.
- * Доступ: только с настроенным SETUP_TOKEN или ADMIN_SETUP_TOKEN.
+ * Доступ: ADMIN_SETUP_TOKEN, если переменная задана, иначе SETUP_TOKEN.
  */
 
 async function handler(request: Request): Promise<Response> {
@@ -65,7 +65,7 @@ async function handler(request: Request): Promise<Response> {
       {
         ok: false,
         error: error instanceof Error ? error.message : 'Неизвестная ошибка',
-        hint: 'Проверь DATABASE_URL: pooled-строка Neon, sslmode=require. Если таблицы уже есть — схема применяется повторно безопасно.',
+        hint: 'Проверь DATABASE_URL. Повторный запуск с демо-данными на рабочей базе опасен: сначала сделайте резервную копию и согласуйте изменения.',
       },
       500,
     )

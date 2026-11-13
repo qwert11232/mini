@@ -1,4 +1,5 @@
 import { dbUrl, dbUrlCandidates, dbUrlPresence, failure, getDb, json } from './_lib/db.js'
+import { adminIds } from './_lib/admin-access.js'
 import { getWebhookInfo } from './bot/_lib/telegram.js'
 
 /**
@@ -30,9 +31,10 @@ async function handler(request: Request): Promise<Response> {
       DATABASE_URL: Boolean(process.env.DATABASE_URL),
       TELEGRAM_BOT_TOKEN: Boolean(process.env.TELEGRAM_BOT_TOKEN),
       TELEGRAM_WEBHOOK_SECRET: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET),
-      SETUP_TOKEN: Boolean(process.env.SETUP_TOKEN ?? process.env.ADMIN_SETUP_TOKEN),
-      ADMIN_TELEGRAM_IDS: (process.env.ADMIN_TELEGRAM_IDS ?? '793536041').split(',').length,
-      VITE_APP_URL: process.env.VITE_APP_URL ?? '(не задан, берётся origin запроса)',
+      SETUP_TOKEN: Boolean(process.env.SETUP_TOKEN),
+      ADMIN_SETUP_TOKEN: Boolean(process.env.ADMIN_SETUP_TOKEN),
+      ADMIN_TELEGRAM_IDS: adminIds().length,
+      VITE_APP_URL: process.env.VITE_APP_URL ?? '(не задан, используется адрес по умолчанию)',
     }
 
     const telegram = process.env.TELEGRAM_BOT_TOKEN
@@ -64,7 +66,8 @@ async function handler(request: Request): Promise<Response> {
             dbUrlVars: dbUrlPresence(),
             TELEGRAM_BOT_TOKEN: Boolean(process.env.TELEGRAM_BOT_TOKEN),
             TELEGRAM_WEBHOOK_SECRET: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET),
-            SETUP_TOKEN: Boolean(process.env.SETUP_TOKEN ?? process.env.ADMIN_SETUP_TOKEN),
+            SETUP_TOKEN: Boolean(process.env.SETUP_TOKEN),
+            ADMIN_SETUP_TOKEN: Boolean(process.env.ADMIN_SETUP_TOKEN),
             VITE_APP_URL: process.env.VITE_APP_URL ?? '(не задан)',
           },
           hint:

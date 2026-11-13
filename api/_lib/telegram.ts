@@ -1,4 +1,5 @@
 import { HttpError } from './db.js'
+import { isAdminId } from './admin-access.js'
 
 export type TelegramUser = {
   id: number
@@ -110,26 +111,9 @@ export async function resolveUser(request: Request): Promise<TelegramUser | null
   return verifyInitData(initData)
 }
 
-/**
- * Админ определяется по списку Telegram ID (или username как запасной вариант).
- * Права проверяются только на сервере — фронтенд ничего не решает.
- * ID владельца клуба зашит по умолчанию, чтобы админка работала без лишних env;
- * ADMIN_TELEGRAM_IDS в Vercel полностью перекрывает это значение.
- */
-const DEFAULT_ADMIN_IDS = '793536041'
-
-export function isAdmin(user: TelegramUser & { username?: string | null }): boolean {
-  const ids = (process.env.ADMIN_TELEGRAM_IDS ?? DEFAULT_ADMIN_IDS)
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
-  if (ids.includes(String(user.id))) return true
-
-  const usernames = (process.env.ADMIN_TELEGRAM_USERNAMES ?? '')
-    .split(',')
-    .map((value) => value.trim().replace(/^@/, '').toLowerCase())
-    .filter(Boolean)
-  return Boolean(user.username && usernames.includes(user.username.toLowerCase()))
+/** Роль администратора определяется только по списку неизменяемых Telegram ID. */
+export function isAdmin(user: TelegramUser): boolean {
+  return isAdminId(user.id)
 }
 
 export function isPreviewMode(): boolean {
