@@ -74,8 +74,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          url='https://mini-seven-xi.vercel.app/api/bot/activate'
-          audience=$(jq -rn --arg value "$url" '$value | @uri')
+          url='https://mini-seven-xi.vercel.app/api/bot/setup?mode=activate'
+          # Audience — постоянный идентификатор интеграции, не обязательно URL запроса.
+          audience=$(jq -rn --arg value 'https://mini-seven-xi.vercel.app/api/bot/activate' '$value | @uri')
           response=$(curl -fsS --max-time 15 -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}")
           token=$(jq -er '.value' <<< "$response")
           echo "::add-mask::$token"
