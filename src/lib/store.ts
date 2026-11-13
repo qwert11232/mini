@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api } from './api'
-import { getTelegram } from './telegram'
 import { COACHES, COURTS, FREE_SLOTS, PRODUCTS, SESSIONS } from '../data/club'
 import type { Booking, ClientProfile, Order, OrderContact } from './types'
 
-const MODE_KEY = 'dt.mode.v1'
-
-/** 'api' — живой бэкенд Vercel+Neon; 'demo' — локальные данные (нет сети/бэкенда ТГ). */
+/** 'api' — сервер; 'demo' — только локальный предпросмотр. */
 export type Mode = 'api' | 'demo'
 
 export type Store = {
   mode: Mode
   loading: boolean
+  loadError: boolean
   bookings: Booking[]
   orders: Order[]
   client: ClientProfile | null
@@ -26,14 +24,6 @@ export type Store = {
   ) => Promise<{ ok: boolean; error?: string; clientLabel?: string }>
   toggleFavorite: (productId: string) => void
   retry: () => void
-}
-
-function readMode(): Mode {
-  try {
-    return localStorage.getItem(MODE_KEY) === 'api' ? 'api' : 'demo'
-  } catch {
-    return 'demo'
-  }
 }
 
 function readLocal<T>(key: string, fallback: T): T {
@@ -53,9 +43,15 @@ function writeLocal(key: string, value: unknown): void {
   }
 }
 
+/** При сетевой ошибке или 5xx сервер мог сохранить действие до потери ответа. */
+function outcomeUnknown(error: unknown): boolean {
+  return !(error instanceof ApiError) || error.status >= 500
+}
+
 export function useStore(): Store {
-  const [mode, setMode] = useState<Mode>(readMode)
-  const [loading, setLoading] = useState(mode === 'api')
+  const [mode, setMode] = useState<Mode>('demo')
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [bookings, setBookings] = useState<Booking[]>(() => import.meta.env.DEV ? readLocal('dt.bookings.v1', []) : [])
   const [orders, setOrders] = useState<Order[]>(() => import.meta.env.DEV ? readLocal('dt.orders.v1', []) : [])
   const [client, setClient] = useState<ClientProfile | null>(null)
@@ -70,55 +66,33 @@ export function useStore(): Store {
     }
   }, [])
 
-  /** Определяем режим один раз за сессию: отвечает ли /api. */
+  /** Не показываем пустые личные данные, пока все запросы не завершились успешно. */
   useEffect(() => {
     let cancelled = false
     setLoading(true)
+    setLoadError(false)
 
-    // Номер клиента подгружаем при входе на сайт, а не только после заказа.
-    // Ошибка профиля не должна переводить весь сайт в демо-режим.
-    api
-      .client()
-      .then((profile) => {
-        if (!cancelled && mounted.current && typeof profile.clientNo === 'number') setClient(profile)
-      })
-      .catch(() => {
-        // Профиль появится при повторной попытке или после оформления заказа.
-      })
-
-    api
-      .orders()
-      .then((data) => {
-        if (cancelled || !mounted.current) return
-        setOrders((previous) => [
-          ...previous.filter((item) => !data.orders.some((order) => order.id === item.id)),
-          ...data.orders,
-        ])
-      })
-      .catch(() => {
-        // Ошибка списка заказов не должна скрывать доступное расписание.
-      })
-
-    api
-      .bookings()
-      .then((data) => {
-        if (cancelled || !mounted.current) return
-        setMode('api')
-        writeLocal(MODE_KEY, 'api')
-        setBookings(data.bookings)
-      })
-      .catch(() => {
-        if (cancelled || !mounted.current) return
-        setMode('demo')
-        writeLocal(MODE_KEY, 'demo')
-      })
-      .finally(() => {
-        if (!cancelled && mounted.current) setLoading(false)
-      })
-
-    return () => {
-      cancelled = true
+    const load = async () => {
+      // Профиль также подготавливает схему клиента. Не запускаем его параллельно
+      // с такой же инициализацией в /orders на другом инстансе функции.
+      const profile = await api.client()
+      const [orderData, bookingData] = await Promise.all([api.orders(), api.bookings()])
+      if (cancelled || !mounted.current) return
+      setClient(profile)
+      setOrders(orderData.orders)
+      setBookings(bookingData.bookings)
+      setMode('api')
     }
+
+    void load().catch(() => {
+      if (cancelled || !mounted.current) return
+      if (import.meta.env.DEV) setMode('demo')
+      else setLoadError(true)
+    }).finally(() => {
+      if (!cancelled && mounted.current) setLoading(false)
+    })
+
+    return () => { cancelled = true }
   }, [attempt])
 
   useEffect(() => {
@@ -135,20 +109,23 @@ export function useStore(): Store {
 
   const book = useCallback(
     async (draft: Omit<Booking, 'id' | 'createdAt'>) => {
-      if (!import.meta.env.DEV && !getTelegram()?.initData) return { ok: false, error: 'Откройте приложение в Telegram, чтобы записаться.' }
       if (!import.meta.env.DEV && mode !== 'api') return { ok: false, error: 'Сервис недоступен. Бронь не создана, попробуйте позже.' }
       if (mode === 'api') {
         try {
           await api.createBooking(draft)
-          const data = await api.bookings().catch(() => null)
-          if (mounted.current && data) setBookings(data.bookings)
+          // Бронь уже создана. Если обновить список не удалось, попросим
+          // перепроверить данные, а не сообщим, что создание не состоялось.
+          try {
+            const data = await api.bookings()
+            if (mounted.current) setBookings(data.bookings)
+          } catch {
+            if (mounted.current) setLoadError(true)
+          }
           return { ok: true }
         } catch (error) {
-          if (error instanceof ApiError && error.status === 401) {
-            if (mounted.current) {
-              setMode('demo')
-              writeLocal(MODE_KEY, 'demo')
-            }
+          if (outcomeUnknown(error)) {
+            if (mounted.current) setLoadError(true)
+            return { ok: false, error: 'Не удалось получить ответ. Проверьте свои записи перед повтором.' }
           }
           return { ok: false, error: error instanceof Error ? error.message : 'Не удалось записаться' }
         }
@@ -166,10 +143,18 @@ export function useStore(): Store {
       if (mode === 'api') {
         try {
           await api.cancelBooking(id)
-          const data = await api.bookings().catch(() => null)
-          if (mounted.current && data) setBookings(data.bookings)
+          try {
+            const data = await api.bookings()
+            if (mounted.current) setBookings(data.bookings)
+          } catch {
+            if (mounted.current) setLoadError(true)
+          }
           return { ok: true }
         } catch (error) {
+          if (outcomeUnknown(error)) {
+            if (mounted.current) setLoadError(true)
+            return { ok: false, error: 'Не удалось получить ответ. Проверьте свои записи перед повтором.' }
+          }
           return { ok: false, error: error instanceof Error ? error.message : 'Не удалось отменить запись' }
         }
       }
@@ -182,7 +167,6 @@ export function useStore(): Store {
 
   const order = useCallback(
     async (productId: string, quantity: number, contact: OrderContact, productTitle?: string) => {
-      if (!import.meta.env.DEV && !getTelegram()?.initData) return { ok: false, error: 'Откройте приложение в Telegram, чтобы оформить заказ.' }
       if (!import.meta.env.DEV && mode !== 'api') return { ok: false, error: 'Сервис недоступен. Заказ не создан, попробуйте позже.' }
       if (mode === 'api') {
         try {
@@ -213,6 +197,10 @@ export function useStore(): Store {
           }
           return { ok: true, clientLabel: created.clientLabel }
         } catch (error) {
+          if (outcomeUnknown(error)) {
+            if (mounted.current) setLoadError(true)
+            return { ok: false, error: 'Не удалось получить ответ. Проверьте свои заказы перед повтором.' }
+          }
           return { ok: false, error: error instanceof Error ? error.message : 'Не удалось оформить' }
         }
       }
@@ -246,6 +234,7 @@ export function useStore(): Store {
   return {
     mode,
     loading,
+    loadError,
     bookings,
     orders,
     client,

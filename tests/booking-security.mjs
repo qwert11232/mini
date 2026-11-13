@@ -44,7 +44,7 @@ registerHooks({
         export function getDb() { return globalThis.__bookingTestDb }
         export function dbUrl() { return { url: 'postgres://localhost/test', from: 'test' } }
         export class HttpError extends Error { constructor(status, message) { super(message); this.status = status } }
-        export function json(data, status = 200) { return Response.json(data, { status }) }
+        export function json(data, status = 200) { return Response.json(data, { status, headers: { 'cache-control': 'no-store' } }) }
         export function failure(error) { return json({ error: error.message }, error.status || 500) }
         export function readString(value, field, max = 200) {
           if (typeof value !== 'string' || !value.trim() || value.trim().length > max) throw new HttpError(400, field)
@@ -61,7 +61,7 @@ registerHooks({
 })
 
 const { createBooking, cancelBooking, listBookings } = await import('../api/bookings.ts')
-const { createOrder } = await import('../api/orders.ts')
+const { createOrder, listOrders } = await import('../api/orders.ts')
 const { default: client } = await import('../api/client.ts')
 const { default: catalog } = await import('../api/catalog.ts')
 const { createSlots, createSession, updateSession, deleteSession, deleteSlot } = await import('../api/bot/_lib/catalog-admin.ts')
@@ -73,7 +73,7 @@ const { default: setup } = await import('../api/bot/setup.ts')
 const { appUrl } = await import('../api/bot/_lib/app-url.ts')
 const { cancelOwnBooking } = await import('../api/bot/_lib/user-screens.ts')
 const { clubDate } = await import('../api/bot/_lib/db.ts')
-const { isAdmin: isMiniAppAdmin } = await import('../api/_lib/telegram.ts')
+const { isAdmin: isMiniAppAdmin, verifyInitData } = await import('../api/_lib/telegram.ts')
 const { default: me } = await import('../api/me.ts')
 // Если allowlist задан явно, даже пустой, он полностью заменяет ID по умолчанию.
 const configuredAdmins = process.env.ADMIN_TELEGRAM_IDS
@@ -88,15 +88,53 @@ assert.equal(isMiniAppAdmin({ ...adminUser, id: 123456789 }), true)
 process.env.ADMIN_TELEGRAM_IDS = configuredAdmins
 
 const secret = createHmac('sha256', 'WebAppData').update(process.env.TELEGRAM_BOT_TOKEN).digest()
-function signed(id = 123456789) {
-  const params = new URLSearchParams({ auth_date: String(Math.floor(Date.now() / 1000)), user: JSON.stringify({ id, first_name: 'Игрок' }) })
-  const data = [...params.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join('\n')
+function signedFields(fields) {
+  const params = new URLSearchParams(fields)
+  const data = [...params.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, v]) => `${k}=${v}`).join('\n')
   params.set('hash', createHmac('sha256', secret).update(data).digest('hex'))
   return `tma ${params}`
+}
+function signed(id = 123456789) {
+  return signedFields({ auth_date: String(Math.floor(Date.now() / 1000)), user: JSON.stringify({ id, first_name: 'Игрок' }) })
 }
 function request(path, body, auth = signed(), method = 'POST') {
   return new Request(`https://example.test/api/${path}`, { method, headers: auth ? { authorization: auth } : { 'x-dt-device': 'testdevice123' }, ...(body ? { body: JSON.stringify(body) } : {}) })
 }
+
+// Фиксированный вектор рассчитан отдельно Python hmac/hashlib: проверяем
+// порядок полей, URL-декодирование и включение Telegram signature в HMAC.
+const vector = new URLSearchParams({
+  query_id: 'AA+/= тест',
+  user: '{"id":444444444,"first_name":"Ёж & Co","last_name":"Тест","username":"test_user"}',
+  signature: 'new-ed25519-signature',
+  ab: 'second',
+  a_B: 'first',
+  auth_date: '1700000000',
+  hash: 'f8f17774f2598fe9f4cfd735cdb320004c4f172a45beaa8a1cd8ad8691c71313',
+})
+assert.deepEqual(await verifyInitData(vector.toString(), 4_000_000_000), {
+  id: 444444444, firstName: 'Ёж & Co', lastName: 'Тест', username: 'test_user',
+})
+const alteredVector = new URLSearchParams(vector)
+alteredVector.set('signature', 'changed')
+await assert.rejects(verifyInitData(alteredVector.toString(), 4_000_000_000), (error) => error.status === 401)
+await assert.rejects(verifyInitData(`${vector}&user=%7B%22id%22%3A1%7D`, 4_000_000_000), (error) => error.status === 401)
+await assert.rejects(verifyInitData(`${vector}&hash=${vector.get('hash')}`, 4_000_000_000), (error) => error.status === 401)
+const nowSeconds = Math.floor(Date.now() / 1000)
+const minimalUser = JSON.stringify({ id: 444444444, first_name: 'Игрок' })
+for (const fields of [
+  { auth_date: String(nowSeconds - 601), user: minimalUser },
+  { auth_date: String(nowSeconds + 60), user: minimalUser },
+  { auth_date: `${nowSeconds}.1`, user: minimalUser },
+  { auth_date: String(nowSeconds), user: 'null' },
+  { auth_date: String(nowSeconds), user: JSON.stringify({ id: -1, first_name: 'Игрок' }) },
+  { auth_date: String(nowSeconds), user: JSON.stringify({ id: '444444444', first_name: 'Игрок' }) },
+  { auth_date: String(nowSeconds) },
+]) {
+  await assert.rejects(verifyInitData(signedFields(fields).slice(4)), (error) => error.status === 401)
+}
+assert.equal((await verifyInitData(signedFields({ auth_date: String(nowSeconds - 599), user: minimalUser }).slice(4))).id, 444444444)
+
 await db.exec(`
   insert into courts (id, name, surface) values ('c', 'Корт 1', 'Хард'), ('other', 'Корт 2', 'Хард');
   insert into coaches (id, name, role, initials) values ('coach', 'Тренер', 'тренер', 'Т');
@@ -347,6 +385,11 @@ function playerMessage(text) {
 function lastKeyboard(payload) {
   return payload.reply_markup?.inline_keyboard?.flat() ?? []
 }
+function assertMiniAppButton(payload) {
+  const buttons = lastKeyboard(payload)
+  assert.ok(buttons.some((button) => button.web_app?.url === 'https://mini-seven-xi.vercel.app' && !button.url))
+  assert.ok(!buttons.some((button) => button.url === 'https://mini-seven-xi.vercel.app'), 'кнопка Mini App не должна быть обычной ссылкой')
+}
 
 // Роли: /start и команды дают разные экраны, а web_app открывает Mini App в Telegram.
 telegramCalls.length = 0
@@ -354,7 +397,7 @@ await botStep(playerMessage('/start'))
 const playerStart = telegramCalls.at(-1).payload
 assert.match(playerStart.text, /ДТ · Теннисный клуб/)
 assert.ok(!playerStart.text.includes('Панель клуба'))
-assert.ok(lastKeyboard(playerStart).some((button) => button.web_app?.url === 'https://mini-seven-xi.vercel.app'))
+assertMiniAppButton(playerStart)
 assert.ok(lastKeyboard(playerStart).some((button) => button.callback_data === 'u:me'))
 
 // Совпадение username не даёт прав: важен только неизменяемый числовой ID.
@@ -393,7 +436,7 @@ telegramCalls.length = 0
 await botStep(adminMessage('/start'))
 const adminStart = telegramCalls.at(-1).payload
 assert.match(adminStart.text, /Панель клуба/)
-assert.ok(lastKeyboard(adminStart).some((button) => button.web_app?.url === 'https://mini-seven-xi.vercel.app'))
+assertMiniAppButton(adminStart)
 assert.ok(lastKeyboard(adminStart).some((button) => button.callback_data === 'u:home'))
 
 // Подделка admin-callback от обычного ID не открывает админский экран.
@@ -426,6 +469,7 @@ assert.ok(!lastKeyboard(deniedCommand).some((button) => String(button.callback_d
 telegramCalls.length = 0
 await botStep(playerMessage('/schedule'))
 const playerSchedule = telegramCalls.at(-1).payload
+assertMiniAppButton(playerSchedule)
 assert.match(playerSchedule.text, /Расписание/)
 assert.ok(lastKeyboard(playerSchedule).some((button) => button.callback_data === 'u:schedule:1'))
 assert.ok(!lastKeyboard(playerSchedule).some((button) => button.callback_data === 'sesnue'))
@@ -452,6 +496,7 @@ assert.doesNotMatch(playerError.text, /database diagnostics|migrate-bot-state|he
 telegramCalls.length = 0
 await botStep(playerMessage('/me'))
 const playerBookings = telegramCalls.at(-1).payload
+assertMiniAppButton(playerBookings)
 assert.match(playerBookings.text, /Ваши записи/)
 assert.ok(lastKeyboard(playerBookings).some((button) => String(button.callback_data ?? '').startsWith('u:cancelask:')))
 
@@ -746,7 +791,9 @@ assert.ok(setupResult.steps.some((item) => item.step === 'setChatMenuButton' && 
 assert.ok(setupResult.steps.some((item) => item.step === 'setMyCommands:players' && item.ok))
 assert.ok(setupResult.steps.some((item) => item.step === 'setMyCommands:admin' && item.ok))
 const menuCall = telegramCalls.find(({ url }) => url.endsWith('/setChatMenuButton'))
+assert.equal(menuCall.payload.menu_button.type, 'web_app')
 assert.equal(menuCall.payload.menu_button.web_app.url, 'https://mini-seven-xi.vercel.app')
+assert.equal(menuCall.payload.menu_button.url, undefined)
 const commandCalls = telegramCalls.filter(({ url }) => url.endsWith('/setMyCommands'))
 assert.ok(commandCalls.some(({ payload }) => payload.scope?.type === 'default' && payload.commands.some((c) => c.command === 'orders' && c.description === 'Мои заказы') && !payload.commands.some((c) => c.command === 'today')))
 assert.ok(commandCalls.some(({ payload }) => payload.scope?.type === 'all_private_chats' && payload.commands.some((c) => c.command === 'start')))
@@ -789,6 +836,92 @@ telegramCalls.length = 0
 await botStep(htmlName)
 assert.ok(telegramCalls.at(-1).payload.text.includes('&lt;Игрок &amp; друг&gt;'))
 
+// Полная цепочка: web_app → подписанный initData → короткая сессия → свой ID.
+// Ни произвольный device key, ни initDataUnsafe без подписи не создают сессию.
+const sessionId = 444444444
+const telegramAuth = signedFields({
+  auth_date: String(Math.floor(Date.now() / 1000)),
+  query_id: 'test-query',
+  signature: 'new-ed25519-signature',
+  user: JSON.stringify({ id: sessionId, first_name: 'Елена', last_name: 'Игрокова', username: 'elena_test' }),
+})
+assert.equal((await me.fetch(request('me', null, null, 'POST'))).status, 401)
+assert.equal((await me.fetch(new Request('https://example.test/api/me', { method: 'POST' }))).status, 401)
+assert.equal((await me.fetch(request('me', null, 'tma user=%7B%22id%22%3A444444444%7D', 'POST'))).status, 401)
+assert.equal((await me.fetch(request('me', null, `${telegramAuth}&auth_date=1`, 'POST'))).status, 401)
+const invalidHash = new URLSearchParams(telegramAuth.slice(4))
+invalidHash.set('user', JSON.stringify({ id: adminId, first_name: 'Подмена' }))
+assert.equal((await me.fetch(request('me', null, `tma ${invalidHash}`, 'POST'))).status, 401)
+assert.equal((await me.fetch(request('me', null, signedFields({ auth_date: String(nowSeconds - 601), user: minimalUser }), 'POST'))).status, 401)
+assert.equal((await db.query('select count(*)::int as n from users where telegram_id = $1', [sessionId])).rows[0].n, 0)
+
+const sessionStartedAt = Date.now()
+const sessionResponse = await me.fetch(request('me', null, telegramAuth, 'POST'))
+assert.equal(sessionResponse.status, 200)
+assert.equal(sessionResponse.headers.get('cache-control'), 'no-store')
+const issued = await sessionResponse.json()
+assert.equal(issued.expiresIn, 7200)
+assert.deepEqual(issued.user, { id: sessionId, firstName: 'Елена', lastName: 'Игрокова' })
+assert.ok(issued.token && !issued.token.includes(process.env.TELEGRAM_BOT_TOKEN))
+const sessionAuth = `tma-session ${issued.token}`
+assert.equal((await me.fetch(request('me', null, sessionAuth, 'POST'))).status, 401, 'сессию нельзя продлевать самой сессией')
+const sessionMe = await me.fetch(request('me', null, sessionAuth, 'GET'))
+assert.equal(sessionMe.status, 200)
+assert.equal((await sessionMe.json()).user.id, sessionId)
+assert.equal((await client.fetch(request('client', null, sessionAuth, 'GET'))).status, 200)
+
+const [encodedPayload, signature] = issued.token.split('.')
+const modifiedPayload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'))
+modifiedPayload.user.id = adminId
+const forgedToken = `${Buffer.from(JSON.stringify(modifiedPayload)).toString('base64url')}.${signature}`
+assert.equal((await me.fetch(request('me', null, `tma-session ${forgedToken}`, 'GET'))).status, 401)
+const changedSignature = (signature[0] === 'A' ? 'B' : 'A') + signature.slice(1)
+assert.equal((await me.fetch(request('me', null, `tma-session ${encodedPayload}.${changedSignature}`, 'GET'))).status, 401)
+assert.equal((await me.fetch(request('me', null, 'tma-session nonsense', 'GET'))).status, 401)
+assert.equal((await me.fetch(new Request('https://other.example.test/api/me', { headers: { authorization: sessionAuth } }))).status, 401, 'сессия привязана к origin')
+const originalToken = process.env.TELEGRAM_BOT_TOKEN
+process.env.TELEGRAM_BOT_TOKEN = 'rotated-test-token'
+assert.equal((await me.fetch(request('me', null, sessionAuth, 'GET'))).status, 401)
+process.env.TELEGRAM_BOT_TOKEN = originalToken
+
+await db.exec(`
+  insert into free_slots (id,court_id,day_offset,start_time,duration_min,price,starts_at)
+  values ('session-slot','c',1,'15:00',60,1900,now() + interval '1 day');
+  insert into products (id,title,category,price) values ('session-product','Мячи для сессии','Мячи',500);
+`)
+const sessionBooking = await createBooking(request('bookings', { kind: 'free', sourceId: 'session-slot' }, sessionAuth))
+assert.equal(sessionBooking.status, 201, await sessionBooking.clone().text())
+const sessionBookingId = (await sessionBooking.json()).id
+const sessionOrder = await createOrder(request('orders', { productId: 'session-product', name: 'Елена', phone: '+79991234567' }, sessionAuth))
+assert.equal(sessionOrder.status, 201, await sessionOrder.clone().text())
+const sessionOrderId = (await sessionOrder.json()).id
+assert.equal((await db.query('select u.telegram_id from bookings b join users u on u.id = b.user_id where b.id = $1', [sessionBookingId])).rows[0].telegram_id, sessionId)
+assert.equal((await db.query('select u.telegram_id from orders o join users u on u.id = o.user_id where o.id = $1', [sessionOrderId])).rows[0].telegram_id, sessionId)
+assert.ok((await (await listBookings(request('bookings?mine=1', null, sessionAuth, 'GET'))).json()).bookings.some((item) => item.id === sessionBookingId))
+assert.ok((await (await listOrders(request('orders', null, sessionAuth, 'GET'))).json()).orders.some((item) => item.id === sessionOrderId))
+
+const otherSessionResponse = await me.fetch(request('me', null, signed(555555555), 'POST'))
+const otherAuth = `tma-session ${(await otherSessionResponse.json()).token}`
+assert.equal((await (await listBookings(request('bookings?mine=1', null, otherAuth, 'GET'))).json()).bookings.length, 0)
+assert.equal((await (await listOrders(request('orders', null, otherAuth, 'GET'))).json()).orders.length, 0)
+assert.equal((await cancelBooking(request(`bookings?id=${sessionBookingId}`, null, otherAuth, 'DELETE'))).status, 404)
+assert.equal((await listOrders(request('orders', null, null, 'GET'))).status, 401)
+assert.equal((await cancelBooking(request(`bookings?id=${sessionBookingId}`, null, null, 'DELETE'))).status, 401)
+
+// Через 11 минут исходная подпись уже не годится для нового входа, но
+// текущая сессия работает; через 2 часа она также отклоняется сервером.
+const realNow = Date.now
+try {
+  Date.now = () => sessionStartedAt + 11 * 60 * 1000
+  assert.equal((await me.fetch(request('me', null, telegramAuth, 'POST'))).status, 401)
+  assert.equal((await listBookings(request('bookings?mine=1', null, sessionAuth, 'GET'))).status, 200)
+  Date.now = () => sessionStartedAt + (2 * 60 * 60 + 2) * 1000
+  assert.equal((await listBookings(request('bookings?mine=1', null, sessionAuth, 'GET'))).status, 401)
+  assert.equal((await createOrder(request('orders', { productId: 'session-product', name: 'Елена', phone: '+79991234567' }, sessionAuth))).status, 401)
+} finally {
+  Date.now = realNow
+}
+
 globalThis.fetch = originalFetch
-console.log('✓ PostgreSQL: Telegram, атомарная аренда, соседние окна, цена, отмена, роли и состояние бота')
+console.log('✓ PostgreSQL: Telegram, сессии, атомарная аренда, соседние окна, цена, отмена, роли и состояние бота')
 await db.close()

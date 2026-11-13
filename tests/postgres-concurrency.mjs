@@ -59,7 +59,7 @@ try {
   const secret = createHmac('sha256', 'WebAppData').update(process.env.TELEGRAM_BOT_TOKEN).digest()
   function request(kind, sourceId, id) {
     const params = new URLSearchParams({ auth_date: String(Math.floor(Date.now() / 1000)), user: JSON.stringify({ id, first_name: 'Test' }) })
-    const data = [...params.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join('\n')
+    const data = [...params.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, v]) => `${k}=${v}`).join('\n')
     params.set('hash', createHmac('sha256', secret).update(data).digest('hex'))
     return new Request('https://example.test/api/bookings', { method: 'POST', headers: { authorization: `tma ${params}` }, body: JSON.stringify({kind, sourceId}) })
   }

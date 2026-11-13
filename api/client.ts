@@ -6,8 +6,8 @@ import { resolveUser, type TelegramUser } from './_lib/telegram.js'
  * GET  /api/client — номер и сохранённые контакты текущего клиента.
  * POST /api/client — сохранить имя и телефон (используется и при заказе).
  *
- * Клиент определяется подписью Telegram initData. Номер выдаёт база: он не меняется при
- * повторном открытии сайта и виден администратору в боте.
+ * Клиент определяется проверенной подписью Telegram или выданной по ней сессией.
+ * Номер выдаёт база: он не меняется при повторном открытии Mini App и виден администратору.
  */
 async function session(request: Request): Promise<TelegramUser> {
   const user = await resolveUser(request)

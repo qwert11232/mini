@@ -2,6 +2,99 @@
    ДТ · Экраны и компоненты
    ========================================================================== */
 
+/* ── Вход только из Telegram ─────────────────────────────────────────────── */
+
+.entry-shell {
+  min-height: 100%;
+  min-height: 100dvh;
+  padding: calc(var(--safe-top) + 28px) 18px calc(var(--safe-bottom) + 28px);
+  background:
+    var(--texture-grain),
+    radial-gradient(100% 60% at 50% 0%, rgba(52, 160, 106, 0.16), transparent 70%),
+    var(--clay-50);
+}
+
+.entry-content {
+  width: min(100%, 400px);
+  margin: 0 auto;
+}
+
+.entry-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: var(--green-800);
+  font-size: var(--fs-footnote);
+  line-height: 1.25;
+}
+
+.entry-brand strong { font-size: var(--fs-subhead); }
+
+.entry-card {
+  margin-top: clamp(36px, 12vh, 100px);
+  padding: 28px 24px 26px;
+  border-radius: var(--r-2xl);
+  background: var(--clay-0);
+  box-shadow: var(--shadow-md), inset 0 0 0 1px var(--separator);
+}
+
+.entry-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 24px;
+  border-radius: 19px;
+  color: var(--green-700);
+  background: var(--green-100);
+}
+
+.entry-eyebrow {
+  margin-bottom: 8px;
+  color: var(--green-600);
+  font-size: var(--fs-caption);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+}
+
+.entry-card h1 {
+  margin-bottom: 12px;
+  font-size: var(--fs-title1);
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+
+.entry-card > p:not(.entry-eyebrow) {
+  color: var(--clay-700);
+  font-size: var(--fs-subhead);
+  line-height: 1.5;
+}
+
+.entry-steps {
+  display: grid;
+  gap: 16px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--separator);
+}
+
+.entry-steps li { display: flex; align-items: flex-start; gap: 12px; font-size: var(--fs-subhead); }
+.entry-steps li > span {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  color: var(--green-700);
+  background: var(--green-100);
+  font-size: var(--fs-footnote);
+  font-weight: 700;
+}
+.entry-steps li > div { padding-top: 2px; overflow-wrap: anywhere; }
+.entry-action { margin-top: 24px; }
+.entry-note { margin-top: 18px; text-align: center; color: var(--text-secondary); font-size: var(--fs-footnote); }
+
 /* ── Шапки экранов ────────────────────────────────────────────────────────── */
 
 .screen-header {

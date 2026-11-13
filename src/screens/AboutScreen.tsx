@@ -17,7 +17,7 @@ import {
   IconUsers,
 } from '../components/Icons'
 import type { Booking } from '../lib/types'
-import { ADMIN_BOT_URL, isInsideTelegram } from '../lib/telegram'
+import { ADMIN_BOT_URL, openTelegramLink } from '../lib/telegram'
 
 const FAQ = [
   {
@@ -183,7 +183,13 @@ export function AboutScreen({ bookings, coaches: COACHES, client, mode, loading,
             <span className="t-subhead grow" style={{ fontWeight: 550 }}>{CLUB.phone}</span>
           </div>
           <div className="contacts-actions">
-            <a className="btn btn-primary btn-sm" href={ADMIN_BOT_URL} target="_blank" rel="noreferrer">
+            <a
+              className="btn btn-primary btn-sm"
+              href={ADMIN_BOT_URL}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(event) => { if (openTelegramLink(ADMIN_BOT_URL)) event.preventDefault() }}
+            >
               <IconTelegram size={16} /> Написать в клуб
             </a>
             <span className="badge badge-green">Ответ до 15 минут</span>
@@ -222,18 +228,16 @@ export function AboutScreen({ bookings, coaches: COACHES, client, mode, loading,
               <span className="group-icon"><IconCloud size={17} /></span>
               <span className="grow stack">
                 <span className="t-subhead" style={{ fontWeight: 550 }}>
-                  {mode === 'api' ? 'Vercel + Neon' : import.meta.env.DEV ? 'Локальный предпросмотр' : 'Записи недоступны'}
+                  {import.meta.env.DEV ? 'Локальный предпросмотр' : mode === 'api' ? 'База клуба' : 'Записи недоступны'}
                 </span>
                 <span className="t-footnote">
                   {loading
                     ? 'Проверяем соединение…'
-                    : mode === 'api'
-                      ? 'Записи сохраняются в базе клуба и видны администратору в боте'
-                      : import.meta.env.DEV
-                        ? 'Демо-данные локального предпросмотра'
-                        : isInsideTelegram()
-                          ? 'Проверьте соединение или переоткройте приложение в Telegram'
-                          : 'Для записи и заказов откройте приложение в Telegram'}
+                    : import.meta.env.DEV
+                      ? 'Демо-данные локального предпросмотра'
+                      : mode === 'api'
+                        ? 'Записи сохраняются в базе клуба и видны администратору в боте'
+                        : 'Проверьте соединение и повторите попытку'}
                 </span>
               </span>
               {mode === 'demo' ? (

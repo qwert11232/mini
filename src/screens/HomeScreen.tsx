@@ -1,20 +1,20 @@
 import { useMemo } from 'react'
 import { CLUB } from '../data/club'
-import type { Catalog } from '../lib/api'
+import type { Catalog, VerifiedUser } from '../lib/api'
 import type { Booking, SectionId } from '../lib/types'
 import { dayName, endTime, formatDuration, minutesUntil } from '../lib/date'
 import { formatPrice, seatsLabel } from '../lib/format'
 import { BallSeams, CourtMark, IconArrowUpRight, IconBall, IconCalendar, IconChevron, IconClock, IconPin, IconSparkle, IconStar, IconTrophy, IconUsers } from '../components/Icons'
-import { userInitials, userName } from '../lib/telegram'
 
 type Props = {
   bookings: Booking[]
   catalog: Catalog
+  user: VerifiedUser | null
   onNavigate: (id: SectionId) => void
   onOpenSession: (id: string) => void
 }
 
-export function HomeScreen({ bookings, catalog, onNavigate, onOpenSession }: Props) {
+export function HomeScreen({ bookings, catalog, user, onNavigate, onOpenSession }: Props) {
   const { coaches: COACHES, courts: COURTS, sessions: SESSIONS, slots: FREE_SLOTS } = catalog
   const upcoming = useMemo(
     () =>
@@ -39,7 +39,8 @@ export function HomeScreen({ bookings, catalog, onNavigate, onOpenSession }: Pro
     return COURTS.filter((court) => soon.some((slot) => slot.courtId === court.id)).length
   }, [COURTS, FREE_SLOTS])
 
-  const greeting = userName()
+  const greeting = user?.firstName
+  const initials = [user?.firstName.trim()[0], user?.lastName?.trim()[0]].filter(Boolean).join('').toUpperCase() || 'ДТ'
 
   return (
     <div className="screen home">
@@ -58,7 +59,7 @@ export function HomeScreen({ bookings, catalog, onNavigate, onOpenSession }: Pro
             </span>
           </div>
           <button type="button" className="avatar" onClick={() => onNavigate('about')} aria-label="Профиль клуба">
-            {userInitials()}
+            {initials}
           </button>
         </div>
 

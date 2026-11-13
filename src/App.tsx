@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { TabBar } from './components/TabBar'
+import { EntryScreen } from './components/EntryScreen'
 import { Toast, useToast } from './components/Toast'
 import { BookingSheet } from './components/BookingSheet'
 import { ProductSheet } from './components/ProductSheet'
@@ -13,15 +14,78 @@ import { ShopScreen } from './screens/ShopScreen'
 import { AboutScreen } from './screens/AboutScreen'
 import { useStore } from './lib/store'
 import { useCatalog } from './lib/useCatalog'
+import { api, ApiError, clearSessionToken, onSessionRejected, setSessionToken, type VerifiedUser } from './lib/api'
 import { bookingFromSession, slotOptions, type ActiveBooking } from './lib/booking'
 import type { Product, SectionId } from './lib/types'
-import { haptic, initTelegram } from './lib/telegram'
+import { getTelegram, haptic, initTelegram } from './lib/telegram'
 import { dayName, endTime } from './lib/date'
 import './styles/tokens.css'
 import './styles/base.css'
 import './styles/app.css'
 
+type AccessState =
+  | { kind: 'checking' | 'missing' | 'invalid' | 'expired' | 'connection' }
+  | { kind: 'ready'; user: VerifiedUser | null }
+
 export function App() {
+  const [access, setAccess] = useState<AccessState>(() => import.meta.env.DEV
+    ? { kind: 'ready', user: null }
+    : getTelegram()?.initData ? { kind: 'checking' } : { kind: 'missing' })
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => { initTelegram() }, [])
+  useEffect(() => onSessionRejected(() => setAccess({ kind: 'expired' })), [])
+
+  useEffect(() => {
+    // npm run dev использует только локальный эмулятор, не рабочий API.
+    if (import.meta.env.DEV) return
+    const initData = getTelegram()?.initData
+    if (!initData) {
+      setAccess({ kind: 'missing' })
+      return
+    }
+
+    let cancelled = false
+    let issuedToken: string | undefined
+    let expiryTimer: number | undefined
+    setAccess({ kind: 'checking' })
+
+    void api.openSession(initData).then((session) => {
+      if (cancelled) return
+      if (!session || typeof session.token !== 'string' || !session.token ||
+          !Number.isSafeInteger(session.expiresIn) || session.expiresIn <= 0 || session.expiresIn > 86_400 ||
+          !session.user || !Number.isSafeInteger(session.user.id) || session.user.id <= 0 ||
+          typeof session.user.firstName !== 'string' ||
+          (session.user.lastName !== null && typeof session.user.lastName !== 'string')) {
+        throw new Error('Некорректный ответ сервиса')
+      }
+      issuedToken = session.token
+      setSessionToken(session.token)
+      setAccess({ kind: 'ready', user: session.user })
+      // Используем интервал от сервера, а не часы телефона. Сам сервер также
+      // проверяет срок на каждом запросе, даже если таймер WebView был усыплён.
+      expiryTimer = window.setTimeout(() => {
+        if (!cancelled && clearSessionToken(session.token)) setAccess({ kind: 'expired' })
+      }, session.expiresIn * 1000)
+    }).catch((error: unknown) => {
+      if (cancelled) return
+      setAccess({ kind: error instanceof ApiError && error.status === 401 ? 'invalid' : 'connection' })
+    })
+
+    return () => {
+      cancelled = true
+      if (expiryTimer !== undefined) window.clearTimeout(expiryTimer)
+      if (issuedToken) clearSessionToken(issuedToken)
+    }
+  }, [attempt])
+
+  if (access.kind !== 'ready') {
+    return <EntryScreen kind={access.kind} onRetry={() => setAttempt((value) => value + 1)} />
+  }
+  return <ClubApp user={access.user} />
+}
+
+function ClubApp({ user }: { user: VerifiedUser | null }) {
   const [section, setSection] = useState<SectionId>('home')
   const [bookingTarget, setBookingTarget] = useState<ActiveBooking | null>(null)
   const [bookingOptions, setBookingOptions] = useState<ActiveBooking[]>([])
@@ -30,12 +94,8 @@ export function App() {
   const [customOpen, setCustomOpen] = useState(false)
   const [ordersOpen, setOrdersOpen] = useState(false)
   const store = useStore()
-  const { catalog, refresh: refreshCatalog } = useCatalog()
+  const { catalog, source: catalogSource, refresh: refreshCatalog } = useCatalog()
   const { toast, show } = useToast()
-
-  useEffect(() => {
-    initTelegram()
-  }, [])
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' })
@@ -94,11 +154,16 @@ export function App() {
     ? store.client.firstName
     : ''
 
+  if (store.loading || catalogSource === 'loading') return <EntryScreen kind="loading" />
+  if (store.loadError || catalogSource === 'error') {
+    return <EntryScreen kind="connection" onRetry={() => { store.retry(); refreshCatalog() }} />
+  }
+
   return (
     <div className="app-shell">
       <main key={section}>
         {section === 'home' ? (
-          <HomeScreen bookings={store.bookings} catalog={catalog} onNavigate={setSection} onOpenSession={openSession} />
+          <HomeScreen bookings={store.bookings} catalog={catalog} user={user} onNavigate={setSection} onOpenSession={openSession} />
         ) : null}
         {section === 'schedule' ? (
           <ScheduleScreen

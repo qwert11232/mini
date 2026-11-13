@@ -1,23 +1,8 @@
 import { failure, getDb, json } from './_lib/db.js'
-import { resolveUser } from './_lib/telegram.js'
 
-/**
- * Отдаём витрину: корты, тренеров, занятия (30 дней), свободные окна и товары.
- *
- * Без ?view=1 это персональный запрос: если подпись Telegram пришла и совпала,
- * игрок попадает в базу. С ?view=1 — чистая витрина без записи в базу: её читает
- * сайт в обычном браузере, где подписи Telegram нет. Выключенные тренеры,
- * занятия, окна и товары не отдаются.
- */
-async function handler(request: Request): Promise<Response> {
+/** Открытый справочник без персональных данных и без регистрации пользователя. */
+async function handler(_request: Request): Promise<Response> {
   try {
-    const viewOnly = new URL(request.url).searchParams.has('view')
-
-    if (!viewOnly) {
-      // Ошибка подписи не должна ломать витрину — просто не регистрируем игрока.
-      await resolveUser(request).catch(() => null)
-    }
-
     const sql = getDb()
 
     const [courts, coaches, sessions, slots, products] = await Promise.all([

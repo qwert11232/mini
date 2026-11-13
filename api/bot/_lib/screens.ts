@@ -73,7 +73,7 @@ export async function menuScreen(): Promise<Screen> {
           { text: '🧾 Журнал действий', callback_data: 'audit' },
           { text: '👤 Вид игрока', callback_data: 'u:home' },
         ],
-        [appButton('🌐 Приложение')],
+        [appButton('🎾 Открыть приложение')],
       ],
     },
   }
