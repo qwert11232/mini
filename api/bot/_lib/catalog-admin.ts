@@ -162,25 +162,31 @@ export async function deleteProduct(id: string, adminTelegramId: number): Promis
   return { ok: true, message: 'товар удалён' }
 }
 
-/**
- * Фото товара: в базе храним только `tg:<file_id>`. Ссылку Telegram отдавать
- * нельзя — в ней токен бота; картинку сайту отдаёт /api/image.
- */
+/** Telegram file_id храним без ссылки с токеном; файл сайту отдаёт /api/image. */
+export async function prepareProductPhoto(
+  photo: { file_id: string; file_size?: number } | undefined,
+): Promise<{ ok: true; image: string } | { ok: false; message: string }> {
+  if (!photo?.file_id) return { ok: false, message: 'Пришлите фото' }
+  if (photo.file_size && photo.file_size > MAX_PHOTO_BYTES) {
+    return { ok: false, message: 'Фото больше 5 МБ — Telegram такое не отдаст' }
+  }
+  if (!(await getFileUrl(photo.file_id))) {
+    return { ok: false, message: 'Telegram не отдал файл — попробуйте другое фото' }
+  }
+  return { ok: true, image: `tg:${photo.file_id}` }
+}
+
 export async function setProductPhoto(
   id: string,
   photo: { file_id: string; file_size?: number } | undefined,
   adminTelegramId: number,
 ): Promise<Result> {
-  if (!photo) return { ok: false, message: 'Пришлите фото' }
-  if (photo.file_size && photo.file_size > MAX_PHOTO_BYTES) {
-    return { ok: false, message: 'Фото больше 5 МБ — Telegram такое не отдаст' }
-  }
-
-  const url = await getFileUrl(photo.file_id)
-  if (!url) return { ok: false, message: 'Telegram не отдал файл — попробуйте другое фото' }
+  const prepared = await prepareProductPhoto(photo)
+  if (!prepared.ok) return prepared
 
   const sql = getDb()
-  await sql`update products set image = ${`tg:${photo.file_id}`} where id = ${id}`
+  const updated = await sql`update products set image = ${prepared.image} where id = ${id} returning id`
+  if (updated.length === 0) return { ok: false, message: 'Товар не найден' }
   await sql`insert into admin_audit (telegram_id, action, payload)
             values (${adminTelegramId}, 'product.photo', ${JSON.stringify({ id })}::jsonb)`
   return { ok: true, message: 'фото обновлено' }
@@ -208,7 +214,8 @@ export async function sessionById(id: string): Promise<Session | null> {
   const sql = getDb()
   const rows = (await sql`
     select id, title, group_kind as "groupKind", level, coach_id as "coachId", court_id as "courtId",
-           day_offset as "dayOffset", start_time as start, duration_min as "durationMin",
+           coalesce((starts_at at time zone 'Europe/Moscow')::date - (now() at time zone 'Europe/Moscow')::date, day_offset) as "dayOffset",
+           start_time as start, duration_min as "durationMin",
            price, seats_total as "seatsTotal", seats_taken as "seatsTaken", is_active as "isActive"
     from training_sessions where id = ${id}
   `) as unknown as Session[]
@@ -274,6 +281,12 @@ export async function updateSession(
   patch: Partial<SessionDraft> & { isActive?: boolean },
   adminTelegramId: number,
 ): Promise<Result> {
+  if (patch.start !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(patch.start)) {
+    return { ok: false, message: 'Время в формате ЧЧ:ММ' }
+  }
+  if (patch.seatsTotal !== undefined && (!Number.isInteger(patch.seatsTotal) || patch.seatsTotal < 1 || patch.seatsTotal > 40)) {
+    return { ok: false, message: 'Мест от 1 до 40' }
+  }
   const sql = getDb()
   const values: Record<string, unknown> = {}
 
@@ -292,12 +305,32 @@ export async function updateSession(
   if (keys.length === 0) return { ok: false, message: 'Нечего менять' }
 
   const sets = keys.map((key, index) => `${key} = $${index + 1}`).join(', ') +
-    (patch.start !== undefined ? `, starts_at = ((starts_at at time zone 'Europe/Moscow')::date + $${keys.indexOf('start_time') + 1}::time) at time zone 'Europe/Moscow'` : '')
-  const updated = await sql.query(`update training_sessions set ${sets} where id = $${keys.length + 1} returning id`, [
+    (patch.start !== undefined ? `, starts_at = ((starts_at at time zone 'Europe/Moscow')::date + $${keys.indexOf('start_time') + 1}::text::time) at time zone 'Europe/Moscow'` : '')
+  // При изменении времени/корта нельзя оставить у игроков записи со старой датой.
+  // seats_taken — та же строка, которую блокирует создание записи; проверка не
+  // позволит изменить расписание одновременно с бронированием.
+  const changesSchedule = patch.start !== undefined || patch.durationMin !== undefined ||
+    patch.courtId !== undefined || patch.coachId !== undefined
+  const conditions = [
+    `id = $${keys.length + 1}`,
+    ...(patch.seatsTotal !== undefined ? [`seats_taken <= $${keys.indexOf('seats_total') + 1}`] : []),
+    ...(changesSchedule ? [
+      `starts_at is not null`,
+      `seats_taken = 0`,
+      `not exists (select 1 from bookings b where b.kind = 'training' and b.source_id = training_sessions.id and b.status in ('active', 'visited'))`,
+    ] : []),
+  ]
+  const updated = await sql.query(`update training_sessions set ${sets} where ${conditions.join(' and ')} returning id`, [
     ...keys.map((key) => values[key] as string | number | boolean),
     id,
   ])
-  if ((updated as unknown[]).length === 0) return { ok: false, message: 'Занятие не найдено' }
+  if ((updated as unknown[]).length === 0) {
+    return { ok: false, message: changesSchedule
+      ? 'Занятие не найдено, без даты или уже имеет записи: время и корт менять нельзя'
+      : patch.seatsTotal !== undefined
+        ? 'Занятие не найдено или мест меньше числа уже занятых'
+        : 'Занятие не найдено' }
+  }
 
   await sql`insert into admin_audit (telegram_id, action, payload)
             values (${adminTelegramId}, 'session.update', ${JSON.stringify({ id, fields: keys })}::jsonb)`
@@ -325,8 +358,8 @@ export async function deleteSession(id: string, adminTelegramId: number): Promis
   const sql = getDb()
   const rows = (await sql`
     delete from training_sessions s
-    where s.id = ${id}
-      and not exists (select 1 from bookings b where b.source_id = ${id} and b.status = 'active')
+    where s.id = ${id} and s.seats_taken = 0
+      and not exists (select 1 from bookings b where b.kind = 'training' and b.source_id = s.id and b.status in ('active', 'visited'))
     returning title
   `) as unknown as { title: string }[]
 
@@ -379,12 +412,22 @@ export async function createSlots(
   return { ok: true, message: `создано окон: ${created}`, created }
 }
 
+/** К какой московской дате относится окно, чтобы после кнопки остаться на ней. */
+export async function slotDayOffset(slotId: string): Promise<number | null> {
+  const sql = getDb()
+  const [row] = (await sql`
+    select (starts_at at time zone 'Europe/Moscow')::date - (now() at time zone 'Europe/Moscow')::date as offset
+    from free_slots where id = ${slotId}
+  `) as unknown as { offset: number | null }[]
+  return row?.offset ?? null
+}
+
 export async function deleteSlot(slotId: string, adminTelegramId: number): Promise<Result> {
   const sql = getDb()
   const rows = (await sql`
     delete from free_slots f
-    where f.id = ${slotId}
-      and not exists (select 1 from bookings b where b.source_id = ${slotId} and b.status = 'active')
+    where f.id = ${slotId} and f.is_active
+      and not exists (select 1 from bookings b where b.kind = 'free' and b.source_id = f.id and b.status = 'active')
     returning id
   `) as unknown as { id: string }[]
   if (!rows[0]) return { ok: false, message: 'Окно занято или уже удалено' }

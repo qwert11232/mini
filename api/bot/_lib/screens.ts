@@ -1,7 +1,8 @@
-import { getDb, money } from './db.js'
+import { getDb, isAdmin, money } from './db.js'
 import { ensureCustomerSchema, formatClientNo } from '../../_lib/customers.js'
 import * as catalog from './catalog-admin.js'
 import type { Keyboard } from './telegram.js'
+import { appButton, appUrl } from './app-url.js'
 import {
   auditLine,
   auditLog,
@@ -21,8 +22,12 @@ function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-export function appUrl(): string {
-  return process.env.VITE_APP_URL ?? 'https://mini-seven-xi.vercel.app'
+/** Старые данные могли не проходить нормализацию: не подставляем их в HTML-атрибут. */
+function phoneHtml(value: string): string {
+  const normalized = value.replace(/\s/g, '')
+  return /^\+?[0-9]{7,15}$/.test(normalized)
+    ? `<a href="tel:${normalized}">${escapeHtml(value)}</a>`
+    : escapeHtml(value)
 }
 
 function backMenu(): Keyboard {
@@ -66,8 +71,9 @@ export async function menuScreen(): Promise<Screen> {
         ],
         [
           { text: '🧾 Журнал действий', callback_data: 'audit' },
-          { text: '🌐 Приложение', url: appUrl() },
+          { text: '👤 Вид игрока', callback_data: 'u:home' },
         ],
+        [appButton('🎾 Открыть приложение')],
       ],
     },
   }
@@ -93,15 +99,16 @@ export async function dayScreen(offset: number): Promise<Screen> {
   const sql = getDb()
   const rows = (await sql`
     select b.id, b.kind, b.title, b.price, b.source_id as "sourceId",
-           to_char(b.starts_at at time zone 'Europe/Moscow', 'HH24:MI') as start,
+           b.start_time as start,
            u.first_name as "firstName", u.username, u.client_no as "clientNo", u.phone
     from bookings b
     left join users u on u.id = b.user_id
-    where b.status = 'active' and b.starts_at::date = current_date + ${offset}::int
+    where b.status = 'active'
+      and (b.starts_at at time zone 'Europe/Moscow')::date = (now() at time zone 'Europe/Moscow')::date + ${offset}::int
     order by b.starts_at
   `) as unknown as DayRow[]
 
-  const label = offset === 0 ? 'Сегодня' : offset === 1 ? 'Завтра' : sessionDate(offset)
+  const label = offset === 0 ? 'Сегодня' : offset === 1 ? 'Завтра' : 'Записи'
   const total = rows.reduce((sum, row) => sum + row.price, 0)
 
   if (rows.length === 0) {
@@ -114,11 +121,11 @@ export async function dayScreen(offset: number): Promise<Screen> {
   const lines = rows.map((row, index) => {
     const who = row.firstName
       ? row.username
-        ? `${escapeHtml(row.firstName)} (@${row.username})`
+        ? `${escapeHtml(row.firstName)} (@${escapeHtml(row.username)})`
         : escapeHtml(row.firstName)
       : 'ресепшен'
     const kind = row.kind === 'free' ? 'аренда' : 'занятие'
-    const phone = row.phone ? ` · <a href="tel:${row.phone}">${row.phone}</a>` : ''
+    const phone = row.phone ? ` · ${phoneHtml(row.phone)}` : ''
     return `${index + 1}. <b>${row.start}</b> · ${escapeHtml(row.title)}\n    ${kind} · ${who} · ${formatClientNo(row.clientNo)}${phone} · ${money(row.price)}`
   })
 
@@ -182,10 +189,10 @@ export async function sessionsScreen(offset: number): Promise<Screen> {
     order by s.start_time
   `) as unknown as SessionRow[]
 
-  const label = offset === 0 ? 'сегодня' : offset === 1 ? 'завтра' : sessionDate(offset)
+  const label = offset === 0 ? 'сегодня' : offset === 1 ? 'завтра' : 'по дням'
   if (rows.length === 0) {
     return {
-      text: [`<b>Расписание · ${label}</b>`, '', 'Занятий нет.'].join('\n'),
+      text: [`<b>Расписание · ${label}</b> · ${sessionDate(offset)}`, '', 'Занятий нет.'].join('\n'),
       keyboard: sessionNavigation(offset),
     }
   }
@@ -197,8 +204,8 @@ export async function sessionsScreen(offset: number): Promise<Screen> {
   })
 
   const buttons = rows.slice(0, 6).map((row) => [
-    { text: `+1 место · ${row.start}`, callback_data: `seatplus:${row.id}` },
-    { text: `−1 место · ${row.start}`, callback_data: `seats:${row.id}` },
+    { text: `＋ ресепшен · ${row.start}`, callback_data: `seatplus:${row.id}` },
+    { text: `− ресепшен · ${row.start}`, callback_data: `seats:${row.id}` },
     { text: `✏️ ${row.start}`, callback_data: `sescard:${row.id}` },
   ])
 
@@ -248,7 +255,7 @@ export async function slotsScreen(offset: number): Promise<Screen> {
     order by f.start_time, c.sort_order
   `) as unknown as SlotRow[]
 
-  const label = offset === 0 ? 'сегодня' : offset === 1 ? 'завтра' : sessionDate(offset)
+  const label = offset === 0 ? 'сегодня' : offset === 1 ? 'завтра' : 'по дням'
   const open = rows.filter((row) => row.active)
   const taken = rows.filter((row) => !row.active)
 
@@ -325,10 +332,10 @@ export async function ordersScreen(): Promise<Screen> {
            coalesce(sum(price), 0)::int as revenue
     from orders
     where status in ('paid', 'issued')
-      and created_at::date = current_date
+      and (created_at at time zone 'Europe/Moscow')::date = (now() at time zone 'Europe/Moscow')::date
   `) as unknown as { count: number; revenue: number }[]
 
-  const header = `<b>Заказы</b>\n\nВыдано сегодня: <b>${handed?.count ?? 0}</b> на <b>${money(handed?.revenue ?? 0)}</b>`
+  const header = `<b>Заказы</b>\n\nСоздано сегодня и уже оплачено/выдано: <b>${handed?.count ?? 0}</b> на <b>${money(handed?.revenue ?? 0)}</b>`
 
   if (rows.length === 0) {
     return { text: `${header}\n\nК выдаче ничего нет.`, keyboard: backMenu() }
@@ -338,9 +345,9 @@ export async function ordersScreen(): Promise<Screen> {
     const name = row.contactName || row.firstName
     const phone = row.contactPhone || row.phone
     const phoneLine = phone
-      ? `📞 <a href="tel:${phone}">${phone}</a>`
+      ? `📞 ${phoneHtml(phone)}`
       : '📞 телефон не указан'
-    return `• ${escapeHtml(row.title)} ×${row.quantity} · ${money(row.price)}\n   ${formatClientNo(row.clientNo)} · ${escapeHtml(name)}${row.username ? ` (@${row.username})` : ''}\n   ${phoneLine} · ${row.created}`
+    return `• ${escapeHtml(row.title)} ×${row.quantity} · ${money(row.price)}\n   ${formatClientNo(row.clientNo)} · ${escapeHtml(name)}${row.username ? ` (@${escapeHtml(row.username)})` : ''}\n   ${phoneLine} · ${row.created}`
   })
 
   return {
@@ -366,19 +373,20 @@ export async function usersScreen(): Promise<Screen> {
   }
 
   const lines = rows.map((row, index) => {
-    const who = row.username ? `${escapeHtml(row.first_name)} (@${row.username})` : escapeHtml(row.first_name)
+    const who = row.username ? `${escapeHtml(row.first_name)} (@${escapeHtml(row.username)})` : escapeHtml(row.first_name)
     const badges = [
-      row.role === 'admin' ? 'админ' : row.role === 'coach' ? 'тренер' : null,
+      isAdmin(Number(row.telegram_id)) ? 'доступ: администратор' : null,
+      row.role === 'admin' ? 'метка: админ' : row.role === 'coach' ? 'метка: тренер' : null,
       row.cancelled > 0 ? `${row.cancelled} отмен` : null,
     ].filter(Boolean)
     const tail = badges.length > 0 ? ` · ${badges.join(' · ')}` : ''
-    const phone = row.phone ? `\n    📞 <a href="tel:${row.phone}">${row.phone}</a>` : ''
+    const phone = row.phone ? `\n    📞 ${phoneHtml(row.phone)}` : ''
     return `${index + 1}. ${who} · ${formatClientNo(row.clientNo)}${tail}\n    заходил ${row.lastSeen ?? '—'}${phone}`
   })
 
   const buttons = rows.slice(0, 6).map((row) => [
     { text: `📝 ${row.first_name.slice(0, 16)}`, callback_data: `note:${row.id}` },
-    { text: `🎭 ${row.first_name.slice(0, 12)}`, callback_data: `role:${row.id}` },
+    { text: `🎾 Тренер · ${row.first_name.slice(0, 12)}`, callback_data: `role:${row.id}` },
   ])
 
   return {
@@ -388,14 +396,15 @@ export async function usersScreen(): Promise<Screen> {
 }
 
 export function playerCard(row: PlayerRow): Screen {
-  const who = row.username ? `${escapeHtml(row.first_name)} (@${row.username})` : escapeHtml(row.first_name)
+  const who = row.username ? `${escapeHtml(row.first_name)} (@${escapeHtml(row.username)})` : escapeHtml(row.first_name)
   return {
     text: [
       `<b>${who}</b>`,
       '',
       `Клиент: <b>${formatClientNo(row.clientNo)}</b>`,
-      `Роль: ${row.role === 'admin' ? 'администратор' : row.role === 'coach' ? 'тренер' : 'игрок'}`,
-      row.phone ? `Телефон: <a href="tel:${row.phone}">${row.phone}</a>` : 'Телефон: не указан',
+      `Доступ: ${isAdmin(Number(row.telegram_id)) ? 'администратор' : 'игрок'}`,
+      `Метка карточки: ${row.role === 'admin' ? 'администратор' : row.role === 'coach' ? 'тренер' : 'игрок'}`,
+      row.phone ? `Телефон: ${phoneHtml(row.phone)}` : 'Телефон: не указан',
       `В базе с ${row.created} · заходил ${row.lastSeen ?? '—'}`,
       `Отменённых записей: ${row.cancelled}`,
     ].join('\n'),
@@ -403,7 +412,7 @@ export function playerCard(row: PlayerRow): Screen {
       inline_keyboard: [
         [
           { text: '📝 Заметка', callback_data: `note:${row.id}` },
-          { text: '🎭 Роль', callback_data: `role:${row.id}` },
+          { text: '🎾 Отметить тренером', callback_data: `role:${row.id}` },
         ],
         [{ text: '‹ Игроки', callback_data: 'users' }],
       ],
@@ -416,7 +425,7 @@ export function playerCard(row: PlayerRow): Screen {
 export async function courtsScreen(): Promise<Screen> {
   const rows = await courtLoad()
   if (rows.length === 0) {
-    return { text: '<b>Корты</b>\n\nКортов нет — запустите /api/admin/setup.', keyboard: backMenu() }
+    return { text: '<b>Корты</b>\n\nКорты не найдены. Проверьте данные и обратитесь к разработчику.', keyboard: backMenu() }
   }
 
   const lines = rows.map(
@@ -488,15 +497,16 @@ export async function helpScreen(): Promise<Screen> {
     text: [
       '<b>Как пользоваться панелью</b>',
       '',
-      '📅 <b>Сегодня / Завтра</b> — записи дня. У каждой две кнопки: отметить посещение или отменить (место вернётся в продажу).',
-      '🕘 <b>Расписание</b> — занятия по дням. «＋ Добавить занятие»: название, время, цена, места, формат, тренер, корт и повтор на несколько дней. По кнопке ✏️ у занятия — цена, время, места, снятие с продажи и удаление.',
-      '🎾 <b>Свободная игра</b> — окна аренды: «＋ Добавить окно» создаёт окна на неделю вперёд; окно можно закрыть под телефонную бронь или удалить.',
+      '📅 <b>Сегодня / Завтра</b> — записи дня. Можно отменить запись или отметить посещение после начала занятия.',
+      '🕘 <b>Расписание</b> — занятия по дням. «＋ ресепшен» добавляет телефонную запись; «− ресепшен» отменяет только такую запись, не запись игрока. В ✏️ — цена, время, места и управление занятием; время нельзя менять, пока есть записи.',
+      '🎾 <b>Свободная игра</b> — окна аренды: «＋ Добавить окно» создаёт окна с повтором до 30 дней. Окно можно закрыть под телефонную бронь или удалить; занятое игроком окно нельзя открыть без отмены его записи.',
       '🛍 <b>Заказы</b> — резервы из магазина: «Выдать» закрывает заказ и уведомляет покупателя.',
-      '👥 <b>Игроки</b> — заметка о клиенте и роль (игрок / тренер / админ).',
+      '👥 <b>Игроки</b> — заметка о клиенте и отметка тренера. Права администратора задаются только через Telegram ID.',
       '🏟 <b>Корты</b> — загрузка на неделю.',
       '📦 <b>Товары</b> — вся витрина: «＋ Новый товар» (название, цена, категория, описание, фото) и правка любого товара. Фото присылается картинкой прямо в чат. Всё, что вы меняете, сразу видно на сайте.',
       '🧾 <b>Журнал</b> — кто и что менял.',
       '',
+      'Роль определяется Telegram ID: администратор видит эту панель, остальные — меню игрока. «👤 Вид игрока» в меню показывает пользовательский режим для проверки.',
       'У каждой карточки внизу есть «‹ Меню».',
       '',
       `<i>В базе: кортов ${counts?.courts ?? 0}, записей ${counts?.bookings ?? 0}, действий ${counts?.audit ?? 0}.</i>`,
@@ -506,19 +516,23 @@ export async function helpScreen(): Promise<Screen> {
 }
 
 export async function dbErrorScreen(reason: string): Promise<Screen> {
+  let healthUrl: string | null = null
+  try {
+    healthUrl = `${appUrl()}/api/health?diag=1`
+  } catch {
+    // При ошибочном VITE_APP_URL хотя бы покажем причину без битой ссылки.
+  }
   return {
     text: [
       '<b>Панель временно недоступна</b>',
       '',
       `Причина: ${escapeHtml(reason)}`,
       '',
+      'Не запускайте подготовку базы без резервной копии. Передайте причину разработчику.',
       'Проверка связки: /api/health?diag=1',
     ].join('\n'),
     keyboard: {
-      inline_keyboard: [
-        [{ text: '🔧 Починить схему', callback_data: 'repair' }],
-        [{ text: '🌐 Проверка /api/health', url: `${appUrl()}/api/health?diag=1` }],
-      ],
+      inline_keyboard: healthUrl ? [[{ text: '🌐 Проверка /api/health', url: healthUrl }]] : [],
     },
   }
 }
@@ -550,7 +564,7 @@ export type ProductDraft = {
   subtitle?: string
   category?: string
   price?: number
-  photoRequested?: boolean
+  image?: string
 }
 
 export async function productListScreen(): Promise<Screen> {
@@ -570,7 +584,7 @@ export async function productListScreen(): Promise<Screen> {
       `На сайте: <b>${active}</b> из ${rows.length}`,
       '📷 — у товара есть фото. Нажмите на товар, чтобы изменить.',
       '',
-      ...rows.map(catalog.productTitle),
+      ...rows.map((row) => escapeHtml(catalog.productTitle(row))),
     ].join('\n'),
     keyboard: {
       inline_keyboard: [
@@ -638,7 +652,7 @@ export function newProductScreen(draft: ProductDraft): Screen {
       `Цена: ${draft.price !== undefined ? money(draft.price) : '—'}`,
       `Категория: ${draft.category ?? '—'}`,
       `Описание: ${draft.subtitle ? escapeHtml(draft.subtitle) : '—'}`,
-      `Фото: ${draft.photoRequested ? 'будет добавлено' : 'нет'}`,
+      `Фото: ${draft.image ? 'добавлено' : 'нет'}`,
       '',
       ready ? 'Всё готово — нажмите «Сохранить».' : 'Заполните название, цену и категорию.',
     ].join('\n'),
@@ -659,13 +673,13 @@ export function newProductScreen(draft: ProductDraft): Screen {
   }
 }
 
-export function categoryPickScreen(prefix: string): Screen {
+export function categoryPickScreen(prefix: string, back = 'products'): Screen {
   return {
     text: '<b>Категория</b>\n\nВыберите раздел витрины.',
     keyboard: {
       inline_keyboard: [
         ...catalog.CATEGORIES.map((category, index) => [{ text: category, callback_data: `${prefix}:${index}` }]),
-        [{ text: '‹ Назад', callback_data: 'products' }],
+        [{ text: '‹ Назад', callback_data: back }],
       ],
     },
   }
@@ -709,11 +723,11 @@ export function sessionBuilderScreen(
       '<b>Новое занятие в расписании</b>',
       '',
       `Название: ${draft.title ? escapeHtml(draft.title) : '—'}`,
-      `Формат: ${group} · уровень: ${level}`,
-      `Время: ${draft.time ?? '—'} · ${draft.durationMin ?? 60} мин`,
+      `Формат: ${escapeHtml(group ?? '—')} · уровень: ${escapeHtml(level ?? '—')}`,
+      `Время: ${escapeHtml(draft.time ?? '—')} · ${draft.durationMin ?? 60} мин`,
       `Цена: ${draft.price !== undefined ? money(draft.price) : '—'} · мест: ${draft.seats ?? '—'}`,
-      `Тренер: ${coaches.find((c) => c.id === draft.coachId)?.name ?? '—'}`,
-      `Корт: ${courts.find((c) => c.id === draft.courtId)?.name ?? '—'}`,
+      `Тренер: ${escapeHtml(coaches.find((c) => c.id === draft.coachId)?.name ?? '—')}`,
+      `Корт: ${escapeHtml(courts.find((c) => c.id === draft.courtId)?.name ?? '—')}`,
       `Повтор: ${draft.days ?? 1} дн.`,
       '',
       ready ? 'Готово — сохраняйте, занятие сразу появится на сайте.' : 'Заполните все поля.',
@@ -723,14 +737,14 @@ export function sessionBuilderScreen(
         [{ text: '✏️ Название', callback_data: 'sesname' }, { text: '🕘 Время', callback_data: 'sestime' }],
         [{ text: '💰 Цена', callback_data: 'sesprice' }, { text: '🪑 Мест', callback_data: 'sesseats' }],
         [{ text: '📚 Формат', callback_data: 'sesgroup' }, { text: '🎚 Уровень', callback_data: 'seslevel' }],
-        coaches.slice(0, 4).map((coach) => ({
+        ...(coaches.length ? [coaches.slice(0, 4).map((coach) => ({
           text: `${draft.coachId === coach.id ? '✓ ' : ''}${coach.name.split(' ')[0]}`,
           callback_data: `sescoach:${coach.id}`,
-        })),
-        courts.slice(0, 4).map((court) => ({
+        }))] : []),
+        ...(courts.length ? [courts.slice(0, 4).map((court) => ({
           text: `${draft.courtId === court.id ? '✓ ' : ''}${court.name}`,
           callback_data: `sescourt:${court.id}`,
-        })),
+        }))] : []),
         [
           { text: `Повтор: ${draft.days ?? 1} дн.`, callback_data: 'sesdays' },
           { text: '⏱ Длительность', callback_data: 'sesdur' },
@@ -788,19 +802,19 @@ export function slotBuilderScreen(
     text: [
       '<b>Новое окно свободной игры</b>',
       '',
-      `Время: ${draft.time ?? '—'}`,
+      `Время: ${escapeHtml(draft.time ?? '—')}`,
       `Цена: ${draft.price !== undefined ? money(draft.price) : '—'}`,
-      `Корт: ${courts.find((c) => c.id === draft.courtId)?.name ?? '—'}`,
+      `Корт: ${escapeHtml(courts.find((c) => c.id === draft.courtId)?.name ?? '—')}`,
       `Повтор: ${draft.days ?? 1} дн.`,
       '',
       ready ? 'Готово — окно появится в приложении.' : 'Заполните время, цену и корт.',
     ].join('\n'),
     keyboard: {
       inline_keyboard: [
-        courts.slice(0, 4).map((court) => ({
+        ...(courts.length ? [courts.slice(0, 4).map((court) => ({
           text: `${draft.courtId === court.id ? '✓ ' : ''}${court.name}`,
           callback_data: `slotcourt:${court.id}`,
-        })),
+        }))] : []),
         [
           { text: '🕘 Время', callback_data: 'slottime' },
           { text: '💰 Цена', callback_data: 'slotprice' },

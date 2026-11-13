@@ -1,4 +1,4 @@
-import { getDb, money, type Result } from './db.js'
+import { clubDate, getDb, money, type Result } from './db.js'
 import { ensureCustomerSchema } from '../../_lib/customers.js'
 import type { Keyboard } from './telegram.js'
 
@@ -9,17 +9,13 @@ import type { Keyboard } from './telegram.js'
 
 export type { Result } from './db.js'
 
-const WEEKDAYS = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'] as const
-
 function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** Ближайшая дата занятия: day_offset считается от сегодняшнего дня. */
+/** Дата клуба, отсчитываемая от сегодняшнего дня в Москве. */
 export function sessionDate(dayOffset: number): string {
-  const date = new Date()
-  date.setDate(date.getDate() + dayOffset)
-  return `${date.getDate()}.${String(date.getMonth() + 1).padStart(2, '0')}, ${WEEKDAYS[date.getDay()]}`
+  return clubDate(dayOffset)
 }
 
 function plural(count: number, one: string, few: string, many: string): string {
@@ -50,12 +46,12 @@ export async function summary(): Promise<Summary> {
   const sql = getDb()
   const [row] = (await sql`
     select
-      (select count(*)::int from bookings where status = 'active' and starts_at::date = current_date) as "todayBookings",
-      (select coalesce(sum(price), 0)::int from bookings where status = 'active' and starts_at::date = current_date) as "todayRevenue",
+      (select count(*)::int from bookings where status = 'active' and (starts_at at time zone 'Europe/Moscow')::date = (now() at time zone 'Europe/Moscow')::date) as "todayBookings",
+      (select coalesce(sum(price), 0)::int from bookings where status = 'active' and (starts_at at time zone 'Europe/Moscow')::date = (now() at time zone 'Europe/Moscow')::date) as "todayRevenue",
       (select count(*)::int from bookings where status = 'active' and starts_at >= now()) as "upcoming",
       (select count(*)::int from orders where status = 'reserved') as "orders",
       (select count(*)::int from users) as "users",
-      (select count(*)::int from free_slots where is_active) as "freeSlots",
+      (select count(*)::int from free_slots where is_active and starts_at > now()) as "freeSlots",
       (select count(*)::int from training_sessions where is_active) as "sessions"
   `) as unknown as Summary[]
 
@@ -136,11 +132,22 @@ export async function saveNote(playerId: string, note: string): Promise<Result> 
 export async function setRole(playerId: string, role: string): Promise<Result> {
   if (!['player', 'coach', 'admin'].includes(role)) return { ok: false, message: 'Неизвестная роль' }
   const sql = getDb()
-  await sql`update users set role = ${role} where id = ${playerId}`
-  return { ok: true }
+  const updated = await sql`update users set role = ${role} where id = ${playerId} returning id`
+  return updated.length ? { ok: true } : { ok: false, message: 'Игрок не найден' }
 }
 
 // ─── Записи ─────────────────────────────────────────────────────────────────
+
+/** День записи относительно календаря клуба, для возврата к тому же экрану. */
+export async function bookingDayOffset(bookingId: string): Promise<number | null> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(bookingId)) return null
+  const sql = getDb()
+  const [row] = (await sql`
+    select (starts_at at time zone 'Europe/Moscow')::date - (now() at time zone 'Europe/Moscow')::date as offset
+    from bookings where id = ${bookingId}::uuid
+  `) as unknown as { offset: number | null }[]
+  return row?.offset ?? null
+}
 
 /** Новая цена занятия из текста админа. */
 export async function setSessionPrice(sessionId: string, price: number, adminTelegramId: number): Promise<Result> {
@@ -158,98 +165,157 @@ export async function setSessionPrice(sessionId: string, price: number, adminTel
   return { ok: true, message: `Новая цена: ${money(row.price)}` }
 }
 
-/** Занять место вручную: клиент позвонил на ресепшен. */
+/** Занять место вручную: место и телефонная запись создаются атомарно. */
 export async function reserveSeat(sessionId: string, adminTelegramId: number): Promise<Result> {
   const sql = getDb()
   const updated = (await sql`
-    update training_sessions
-    set seats_taken = seats_taken + 1
-    where id = ${sessionId} and is_active and seats_taken < seats_total
-    returning seats_taken as taken, seats_total as total
+    with reserved as (
+      update training_sessions s set seats_taken = seats_taken + 1
+      where s.id = ${sessionId} and s.is_active and s.seats_taken < s.seats_total and s.starts_at > now()
+      returning s.*
+    ), inserted as (
+      insert into bookings (user_id, kind, source_id, title, subtitle, day_offset, start_time, duration_min, price, starts_at)
+      select null, 'training', r.id, r.title, 'ресепшен · ' || ${String(adminTelegramId)}, r.day_offset,
+             r.start_time, r.duration_min, r.price, r.starts_at
+      from reserved r returning id
+    ), logged as (
+      insert into admin_audit (telegram_id, action, payload)
+      select ${adminTelegramId}, 'session.reserve', ${JSON.stringify({ sessionId })}::jsonb
+      from inserted returning id
+    ) select r.seats_taken as taken, r.seats_total as total from reserved r where exists (select 1 from inserted)
   `) as unknown as { taken: number; total: number }[]
-
   const session = updated[0]
-  if (!session) return { ok: false, message: 'Свободных мест нет' }
-
-  // Клиент на ресепшене не в мини-аппе, поэтому заводим запись без user_id:
-  // место в занятии уже занято, а имя пишем в название — это видно в «Записях».
-  await sql`
-    insert into bookings (user_id, kind, source_id, title, subtitle, day_offset, start_time, duration_min, price, starts_at)
-    select null, 'training', s.id, s.title, 'ресепшен · ' || ${String(adminTelegramId)}, s.day_offset,
-           s.start_time, s.duration_min, s.price, s.starts_at
-    from training_sessions s where s.id = ${sessionId}
-  `
-  await sql`insert into admin_audit (telegram_id, action, payload)
-            values (${adminTelegramId}, 'session.reserve', ${JSON.stringify({ sessionId })}::jsonb)`
+  if (!session) return { ok: false, message: 'Свободных мест нет или занятие уже началось' }
   return { ok: true, message: `Место занято: ${session.taken}/${session.total}` }
 }
 
-/** Закрыть окно аренды — корт занят по телефону. */
+/** Закрыть окно под телефонную бронь и создать запись одной SQL-командой. */
 export async function closeSlot(slotId: string, adminTelegramId: number): Promise<Result> {
   const sql = getDb()
-  const updated = (await sql`
-    update free_slots set is_active = false
-    where id = ${slotId} and is_active
-    returning id, court_id as "courtId", day_offset as "dayOffset", start_time as start
-  `) as unknown as { id: string; courtId: string; dayOffset: number; start: string }[]
-  const slot = updated[0]
-  if (!slot) return { ok: false, message: 'Окно уже закрыто' }
-
-  await sql`
-    insert into bookings (user_id, kind, source_id, title, subtitle, day_offset, start_time, duration_min, price, starts_at)
-    select null, 'free', f.id, 'Корт ' || f.court_id, 'ресепшен · ' || ${String(adminTelegramId)},
-           f.day_offset, f.start_time, f.duration_min, f.price, f.starts_at
-    from free_slots f where f.id = ${slotId}
+  const inserted = await sql`
+    with closed as (
+      update free_slots f set is_active = false
+      where f.id = ${slotId} and f.is_active and f.starts_at > now()
+        and not exists (select 1 from bookings b where b.kind = 'free' and b.source_id = f.id and b.status = 'active')
+      returning f.*
+    ), booked as (
+      insert into bookings (user_id, kind, source_id, title, subtitle, day_offset, start_time, duration_min, price, starts_at)
+      select null, 'free', f.id, 'Корт ' || f.court_id, 'ресепшен · ' || ${String(adminTelegramId)},
+             f.day_offset, f.start_time, f.duration_min, f.price, f.starts_at
+      from closed f returning id
+    ), logged as (
+      insert into admin_audit (telegram_id, action, payload)
+      select ${adminTelegramId}, 'slot.close', ${JSON.stringify({ slotId })}::jsonb
+      from booked returning id
+    ) select id from booked
   `
-  await sql`insert into admin_audit (telegram_id, action, payload)
-            values (${adminTelegramId}, 'slot.close', ${JSON.stringify({ slotId })}::jsonb)`
+  if (inserted.length === 0) return { ok: false, message: 'Окно уже закрыто или недоступно' }
   return { ok: true, message: 'Окно закрыто под аренду' }
 }
 
-/** Вернуть окно аренды в продажу. */
+/** Не открываем окно с активной бронью игрока; ручные брони закрываем атомарно. */
 export async function openSlot(slotId: string, adminTelegramId: number): Promise<Result> {
   const sql = getDb()
-  const updated = (await sql`
-    update free_slots set is_active = true where id = ${slotId} and not is_active returning id
-  `) as unknown as { id: string }[]
-  if (updated.length === 0) return { ok: false, message: 'Окно уже открыто' }
-  await sql`insert into admin_audit (telegram_id, action, payload)
-            values (${adminTelegramId}, 'slot.open', ${JSON.stringify({ slotId })}::jsonb)`
+  const opened = await sql`
+    with manual as materialized (
+      -- Сначала блокируем телефонные записи, затем окно: тот же порядок,
+      -- что у отмены записи. Иначе одновременные действия дают deadlock.
+      select b.id from bookings b
+      where b.kind = 'free' and b.source_id = ${slotId} and b.status = 'active' and b.user_id is null
+      order by b.id for update
+    ), opened as (
+      update free_slots f set is_active = true
+      where f.id = ${slotId} and not f.is_active
+        and (select count(*) from manual) >= 0
+        and not exists (
+          select 1 from bookings b
+          where b.kind = 'free' and b.source_id = f.id and b.status = 'active' and b.user_id is not null
+        )
+      returning f.id
+    ), cancelled_manual as (
+      update bookings b set status = 'cancelled', cancelled_at = now()
+      from opened f, manual m
+      where b.id = m.id and b.source_id = f.id and b.status = 'active'
+      returning b.id
+    ), logged as (
+      insert into admin_audit (telegram_id, action, payload)
+      select ${adminTelegramId}, 'slot.open', ${JSON.stringify({ slotId })}::jsonb
+      from opened returning id
+    ) select id from opened
+  `
+  if (opened.length === 0) {
+    return { ok: false, message: 'Окно уже открыто или занято игроком; сначала отмените его запись' }
+  }
   return { ok: true, message: 'Окно открыто' }
 }
 
-/** Закрыть запись как посещённую. */
+/** Посещение можно отметить только после начала записи. */
 export async function markVisited(bookingId: string, adminTelegramId: number): Promise<Result> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(bookingId)) {
+    return { ok: false, message: 'Запись не найдена' }
+  }
   const sql = getDb()
-  const updated = (await sql`
-    update bookings set status = 'visited'
-    where id = ${bookingId} and status = 'active'
-    returning title
-  `) as unknown as { title: string }[]
-  if (!updated[0]) return { ok: false, message: 'Запись уже закрыта' }
-  await sql`insert into admin_audit (telegram_id, action, payload)
-            values (${adminTelegramId}, 'booking.visited', ${JSON.stringify({ bookingId })}::jsonb)`
+  const updated = await sql`
+    with visited as (
+      update bookings set status = 'visited'
+      where id = ${bookingId}::uuid and status = 'active' and starts_at <= now()
+      returning id
+    ), logged as (
+      insert into admin_audit (telegram_id, action, payload)
+      select ${adminTelegramId}, 'booking.visited', ${JSON.stringify({ bookingId })}::jsonb
+      from visited returning id
+    ) select id from visited
+  `
+  if (!updated.length) return { ok: false, message: 'Запись закрыта или ещё не началась' }
   return { ok: true, message: 'Отмечено посещение' }
 }
 
-/** Вернуть уже отменённую запись, если клиент передумал. */
+/** Восстановить бронь только при наличии свободного окна или места. */
 export async function restoreBooking(bookingId: string, adminTelegramId: number): Promise<Result> {
-  const sql = getDb()
-  const updated = (await sql`
-    update bookings set status = 'active', cancelled_at = null
-    where id = ${bookingId} and status = 'cancelled'
-    returning kind, source_id as "sourceId"
-  `) as unknown as { kind: string; sourceId: string }[]
-  const row = updated[0]
-  if (!row) return { ok: false, message: 'Нечего восстанавливать' }
-
-  if (row.kind === 'free') {
-    await sql`update free_slots set is_active = false where id = ${row.sourceId}`
-  } else {
-    await sql`update training_sessions set seats_taken = least(seats_taken + 1, seats_total) where id = ${row.sourceId}`
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(bookingId)) {
+    return { ok: false, message: 'Запись не найдена' }
   }
-  await sql`insert into admin_audit (telegram_id, action, payload)
-            values (${adminTelegramId}, 'booking.restore', ${JSON.stringify({ bookingId })}::jsonb)`
+  const sql = getDb()
+  let updated: { id: string }[]
+  try {
+    updated = (await sql`
+      with target as materialized (
+        select b.id, b.kind, b.source_id, b.user_id, b.starts_at, b.duration_min
+        from bookings b where b.id = ${bookingId}::uuid and b.status = 'cancelled' and b.starts_at > now()
+        for update
+      ), reserved_slot as (
+        update free_slots f set is_active = false from target t
+        where t.kind = 'free' and t.source_id = f.id and f.is_active and f.starts_at > now()
+          and f.starts_at = t.starts_at and f.duration_min = t.duration_min
+          and not exists (select 1 from bookings b where b.kind = 'free' and b.source_id = f.id and b.status = 'active')
+        returning f.id
+      ), reserved_seat as (
+        update training_sessions s set seats_taken = seats_taken + 1 from target t
+        where t.kind = 'training' and t.source_id = s.id and s.is_active and s.starts_at > now()
+          and s.starts_at = t.starts_at and s.duration_min = t.duration_min
+          and s.seats_taken < s.seats_total
+          and not exists (select 1 from bookings b where b.user_id = t.user_id and b.kind = 'training'
+                          and b.source_id = s.id and b.status = 'active')
+        returning s.id
+      ), restored as (
+        update bookings b set status = 'active', cancelled_at = null
+        from target t where b.id = t.id
+          and ((t.kind = 'free' and exists (select 1 from reserved_slot))
+            or (t.kind = 'training' and exists (select 1 from reserved_seat)))
+        returning b.id
+      ), logged as (
+        insert into admin_audit (telegram_id, action, payload)
+        select ${adminTelegramId}, 'booking.restore', ${JSON.stringify({ bookingId })}::jsonb
+        from restored returning id
+      ) select id from restored
+    `) as unknown as { id: string }[]
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === '23505') {
+      return { ok: false, message: 'Игрок уже записан на это занятие' }
+    }
+    throw error
+  }
+  if (!updated[0]) return { ok: false, message: 'Запись недоступна: место занято или расписание изменилось' }
   return { ok: true, message: 'Запись восстановлена' }
 }
 
@@ -299,11 +365,13 @@ export async function courtLoad(): Promise<LoadRow[]> {
   return (await sql`
     select c.name as court, c.surface,
            (select count(*)::int from bookings b
+             join free_slots f on f.id = b.source_id and f.court_id = c.id
              where b.kind = 'free' and b.status = 'active'
-               and b.starts_at::date between current_date and current_date + 6) as booked,
+               and (b.starts_at at time zone 'Europe/Moscow')::date between
+                   (now() at time zone 'Europe/Moscow')::date and (now() at time zone 'Europe/Moscow')::date + 6) as booked,
            (select count(*)::int from free_slots f
-             where f.court_id = c.id and f.is_active
-               and f.day_offset between 0 and 6) as open
+             where f.court_id = c.id and f.is_active and f.starts_at > now()
+               and (f.starts_at at time zone 'Europe/Moscow')::date <= (now() at time zone 'Europe/Moscow')::date + 6) as open
     from courts c
     where c.is_active
     order by c.sort_order
@@ -313,10 +381,10 @@ export async function courtLoad(): Promise<LoadRow[]> {
 // ─── Ремонт схемы ───────────────────────────────────────────────────────────
 
 /**
- * В одной транзакции досоздаёт недостающие таблицы и колонки и повторно
- * прогоняет сид. Нужно, потому что на существующей базе `create table if not
- * exists` не добавляет новые колонки (у нас так не появился `admin_note`),
- * а `alter table` в схеме идемпотентен.
+ * Оставлена для обратной совместимости, webhook её больше не вызывает.
+ * Statements включали SCHEMA + SEED: повторный прогон на рабочей базе мог
+ * добавить демо-данные и сдвинуть starts_at. Для миграции состояния бота
+ * используйте /api/admin/migrate-bot-state — он создаёт только новую таблицу.
  */
 export async function repairSchema(statements: string[]): Promise<{ applied: number }> {
   const sql = getDb()
@@ -331,16 +399,18 @@ export function auditLine(row: AuditRow): string {
   const who = row.who ?? 'админ'
   const action = row.action
     .replace('booking.cancel', 'отменил запись')
+    .replace('booking.self_cancel', 'отменил свою запись')
     .replace('booking.restore', 'восстановил запись')
     .replace('booking.visited', 'отметил посещение')
     .replace('session.seats', 'поправил места')
     .replace('session.reserve', 'занял место')
+    .replace('session.manual_cancel', 'отменил запись ресепшена')
     .replace('order.issued', 'выдал заказ')
     .replace('product.toggle', 'скрыл/вернул товар')
     .replace('slot.close', 'закрыл окно')
     .replace('slot.open', 'открыл окно')
     .replace('schema.repair', 'починил схему')
-  return `${row.createdAt} · ${escapeHtml(who)} — ${action}`
+  return `${escapeHtml(row.createdAt)} · ${escapeHtml(who)} — ${escapeHtml(action)}`
 }
 
 export function keyboard(rows: { text: string; data: string }[][]): Keyboard {

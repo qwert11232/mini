@@ -4,11 +4,12 @@
   "description": "ДТ — Telegram Mini App теннисного клуба: расписание, свободная игра, магазин, о клубе",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
-    "build": "tsc --noEmit && tsc -p tsconfig.api.json --noEmit && vite build",
+    "build": "node tests/function-budget.mjs && tsc --noEmit && tsc -p tsconfig.api.json --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json --noEmit",
     "smoke": "node smoke.mjs",
-    "test:security": "node --experimental-transform-types --disable-warning=ExperimentalWarning tests/booking-security.mjs"
+    "test:security": "node --experimental-transform-types --disable-warning=ExperimentalWarning tests/booking-security.mjs && node --experimental-transform-types --disable-warning=ExperimentalWarning tests/bot-activation.mjs",
+    "test:postgres": "node --experimental-transform-types --disable-warning=ExperimentalWarning tests/postgres-concurrency.mjs"
   },
   "repository": {
     "type": "git",
@@ -20,6 +21,7 @@
   "homepage": "https://github.com/qwert11232/mini#readme",
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
+    "jose": "^6.2.17",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

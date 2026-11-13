@@ -1,5 +1,13 @@
-import { isAdmin } from './_lib/db.js'
-import { getWebhookInfo, setMyCommands, setWebhook, takeLastError, webhookSecret } from './_lib/telegram.js'
+import { adminIds, isAdmin } from './_lib/db.js'
+import { activateBot } from './_lib/activate.js'
+import {
+  getWebhookInfo,
+  setWebhook,
+  takeLastError,
+  webhookSecret,
+} from './_lib/telegram.js'
+import { appUrl } from './_lib/app-url.js'
+import { configureBotMenu, type MenuStep } from './_lib/menu.js'
 import { verifyInitData } from '../_lib/telegram.js'
 
 /**
@@ -7,29 +15,21 @@ import { verifyInitData } from '../_lib/telegram.js'
  *
  *   https://<домен>/api/bot/setup?token=<SETUP_TOKEN>
  *
- * Делает три вещи: ставит webhook, регистрирует команды меню, отдаёт getWebhookInfo.
- * Любая ошибка возвращается JSON-ом с причиной — функция не должна падать 500,
- * иначе в браузере видно только «A function needed by this page failed».
+ * POST ?mode=activate — отдельная production-активация с GitHub OIDC.
+ * По умолчанию ставит защищённый webhook и обновляет меню Telegram. Режим
+ * ?mode=menu обновляет только кнопку и команды, не трогая webhook и его очередь.
  */
 
-const COMMANDS = [
-  { command: 'start', description: 'Панель администратора' },
-  { command: 'today', description: 'Записи на сегодня' },
-  { command: 'tomorrow', description: 'Записи на завтра' },
-  { command: 'schedule', description: 'Расписание занятий' },
-  { command: 'orders', description: 'Заказы к выдаче' },
-  { command: 'me', description: 'Мои записи' },
-]
-
-type Step = { step: string; ok: boolean; detail?: unknown }
 
 async function handler(request: Request): Promise<Response> {
+  const url = new URL(request.url)
+  // Этот маршрут имеет собственную OIDC-авторизацию и не принимает SETUP_TOKEN.
+  if (url.searchParams.get('mode') === 'activate') return activateBot(request)
   if (request.method !== 'GET' && request.method !== 'POST') {
     return json({ error: 'Метод не поддерживается' }, 405)
   }
 
-  const url = new URL(request.url)
-  const steps: Step[] = []
+  const steps: MenuStep[] = []
 
   try {
     if (!process.env.TELEGRAM_BOT_TOKEN) {
@@ -55,41 +55,52 @@ async function handler(request: Request): Promise<Response> {
       )
     }
 
-    const base = (process.env.VITE_APP_URL ?? url.origin).replace(/\/$/, '')
-    const webhookUrl = `${base}/api/bot/webhook`
+    const requestedMode = url.searchParams.get('mode') ?? 'full'
+    if (requestedMode !== 'full' && requestedMode !== 'menu') {
+      return json({ ok: false, error: 'Неизвестный режим настройки' }, 400)
+    }
+    const menuOnly = requestedMode === 'menu'
+    const app = appUrl()
+    const webhookUrl = `${app}/api/bot/webhook`
     const secret = webhookSecret()
+    let webhookSet: boolean | null = null
 
-    if (!secret) return json({ ok: false, error: 'Настройте TELEGRAM_WEBHOOK_SECRET: 1–256 символов A-Z, a-z, 0-9, _ или -' }, 503)
+    if (!menuOnly) {
+      if (!secret) {
+        return json({ ok: false, error: 'Настройте TELEGRAM_WEBHOOK_SECRET: 1–256 символов A-Z, a-z, 0-9, _ или -' }, 503)
+      }
+      webhookSet = await setWebhook(webhookUrl, secret)
+      steps.push({ step: 'setWebhook', ok: webhookSet, detail: webhookSet ? webhookUrl : takeLastError() })
+    }
 
-    const webhookSet = await setWebhook(webhookUrl, secret)
-    const webhookError = webhookSet ? null : takeLastError()
-    steps.push({ step: 'setWebhook', ok: webhookSet, detail: webhookError ?? webhookUrl })
+    const menuSteps = await configureBotMenu(app)
+    steps.push(...menuSteps)
+    const menuButtonSet = menuSteps.find((step) => step.step === 'setChatMenuButton')?.ok ?? false
 
-    await setMyCommands(COMMANDS)
-    steps.push({ step: 'setMyCommands', ok: true, detail: COMMANDS.length })
+    if (!menuOnly) {
+      const info = await getWebhookInfo()
+      steps.push({ step: 'getWebhookInfo', ok: Boolean(info), detail: info ?? takeLastError() })
+    }
 
-    const info = (await getWebhookInfo()) as Record<string, unknown> | null
-    steps.push({ step: 'getWebhookInfo', ok: Boolean(info), detail: info ?? takeLastError() })
-
-    const ok = webhookSet
-    console.info('[bot/setup]', { webhookUrl, ok, secretConfigured: Boolean(secret) })
+    const ok = steps.every((step) => step.ok)
+    console.info('[bot/setup]', { mode: requestedMode, webhook: webhookSet, ok })
 
     return json(
       {
         ok,
+        mode: requestedMode,
         webhook: webhookUrl,
+        webhookConfigured: webhookSet,
+        appUrl: app,
         access: access.reason,
         secretConfigured: Boolean(secret),
-        // Переменная задана, но Telegram её не примет — иначе причина отказа не видна.
         secretSkipped: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET) && !secret,
-        adminIds: (process.env.ADMIN_TELEGRAM_IDS ?? '793536041').split(',').length,
+        menuButtonConfigured: menuButtonSet,
+        adminIds: adminIds().length,
         steps,
-        // Самая частая причина отказа setWebhook — Telegram не смог скачать сертификат
-        // или достучаться до адреса; тогда в detail лежит текст от Bot API.
         next: ok
-          ? 'Напиши боту /start'
-          : webhookError?.description ??
-            'Telegram не подтвердил webhook — смотри шаг setWebhook в steps',
+          ? 'Напишите боту /start в личном чате'
+          : 'Не все шаги выполнены: проверьте steps. Для chat scope администратор должен начать диалог с ботом.',
       },
       ok ? 200 : 502,
     )
@@ -100,7 +111,7 @@ async function handler(request: Request): Promise<Response> {
         ok: false,
         error: error instanceof Error ? error.message : 'Неизвестная ошибка',
         steps,
-        hint: 'Если это сетевой таймаут — повтори ссылку, Telegram иногда отвечает медленно',
+        hint: 'Проверьте настройки и steps. Не отправляйте токены и ссылки с ними в чат.',
       },
       500,
     )
@@ -127,7 +138,7 @@ async function checkAccess(request: Request, url: URL): Promise<Access> {
   if (auth?.startsWith('tma ')) {
     try {
       const user = await verifyInitData(auth.slice(4))
-      if (isAdmin(user.id, user.username ?? undefined)) return { allowed: true, reason: 'admin_init_data' }
+      if (isAdmin(user.id)) return { allowed: true, reason: 'admin_init_data' }
     } catch {
       // подпись не прошла — падаем к следующей проверке
     }

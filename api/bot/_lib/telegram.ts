@@ -19,6 +19,7 @@ export function takeLastError(): ApiError | null {
 export type InlineButton =
   | { text: string; callback_data: string }
   | { text: string; url: string }
+  | { text: string; web_app: { url: string } }
 
 export type Keyboard = { inline_keyboard: InlineButton[][] }
 
@@ -44,7 +45,7 @@ export type Update = {
     id: string
     from: TelegramUser
     data?: string
-    message?: { message_id: number; chat: { id: number } }
+    message?: { message_id: number; chat: { id: number; type: string } }
   }
 }
 
@@ -144,6 +145,30 @@ export async function getFileUrl(fileId: string): Promise<string | null> {
   return `https://api.telegram.org/file/bot${token()}/${path}`
 }
 
-export async function setMyCommands(commands: { command: string; description: string }[]): Promise<void> {
-  await call('setMyCommands', { commands })
+export type BotCommand = { command: string; description: string }
+
+/** Для игроков — общий список, для чата администратора — расширенный. */
+export type BotCommandScope =
+  | { type: 'default' }
+  | { type: 'all_private_chats' }
+  | { type: 'chat'; chat_id: number }
+
+export async function setMyCommands(commands: BotCommand[], scope?: BotCommandScope): Promise<boolean> {
+  const result = await call<boolean>('setMyCommands', {
+    commands,
+    ...(scope ? { scope } : {}),
+  })
+  return Boolean(result)
+}
+
+/** Кнопка меню чата: открывает Mini App внутри Telegram для всех пользователей. */
+export async function setChatMenuButton(url: string, text = 'Открыть приложение'): Promise<boolean> {
+  const result = await call<boolean>('setChatMenuButton', {
+    menu_button: {
+      type: 'web_app',
+      text,
+      web_app: { url },
+    },
+  })
+  return Boolean(result)
 }
