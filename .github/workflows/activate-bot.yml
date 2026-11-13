@@ -1,0 +1,88 @@
+name: Activate Telegram bot
+
+# Меняет только настройки бота и создаёт его отдельную таблицу. Перед первым
+# применением к существующей базе необходима резервная копия production-ветки.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'api/bot/**'
+      - 'api/_lib/admin-access.ts'
+      - 'migrations/001_bot_dialog_state.sql'
+      - '.github/workflows/activate-bot.yml'
+  pull_request:
+    paths:
+      - 'api/bot/**'
+      - 'api/_lib/admin-access.ts'
+      - 'migrations/001_bot_dialog_state.sql'
+      - '.github/workflows/activate-bot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: telegram-bot-production
+  cancel-in-progress: true
+
+jobs:
+  oidc-check:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Проверить доступность GitHub OIDC без доступа к production
+        shell: bash
+        run: |
+          set -euo pipefail
+          audience=$(jq -rn --arg value 'https://mini-seven-xi.vercel.app/api/bot/activate' '$value | @uri')
+          response=$(curl -fsS --max-time 15 -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}")
+          token=$(jq -er '.value' <<< "$response")
+          echo "::add-mask::$token"
+          OIDC_TOKEN="$token" node -e '
+            const c = JSON.parse(Buffer.from(process.env.OIDC_TOKEN.split(".")[1], "base64url").toString());
+            if (c.iss !== "https://token.actions.githubusercontent.com" || c.aud !== "https://mini-seven-xi.vercel.app/api/bot/activate" ||
+                c.repository_id !== "1441805809" || c.event_name !== "pull_request" ||
+                c.sub !== "repo:qwert11232@157507542/mini@1441805809:pull_request") process.exit(1);
+            console.log("GitHub OIDC for the pull request is available; production was not contacted.");
+          '
+          unset token response
+
+  activate:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Дождаться production-деплоя этого коммита
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${GITHUB_SHA:0:7}"
+          for attempt in $(seq 1 60); do
+            build=$(curl -fsS --max-time 10 "https://mini-seven-xi.vercel.app/api/health?activation_check=${GITHUB_SHA}" | jq -r '.build // empty' 2>/dev/null) || build=''
+            if [ "$build" = "$expected" ]; then
+              echo "Production deployment $build is ready."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo '::error::Production deployment did not reach the expected commit.'
+          exit 1
+
+      - name: Создать состояние бота и обновить меню Telegram
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://mini-seven-xi.vercel.app/api/bot/activate'
+          audience=$(jq -rn --arg value "$url" '$value | @uri')
+          response=$(curl -fsS --max-time 15 -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}")
+          token=$(jq -er '.value' <<< "$response")
+          echo "::add-mask::$token"
+          status=$(curl -sS --retry 2 --retry-delay 3 --max-time 30 -o "$RUNNER_TEMP/bot-activation.json" -w '%{http_code}' -X POST -H "Authorization: Bearer $token" "$url")
+          unset token response
+          jq '{ok, stateTable, webhookUnchanged, steps, error}' "$RUNNER_TEMP/bot-activation.json"
+          if [ "$status" != 200 ] || ! jq -e '.ok == true and .webhookUnchanged == true' "$RUNNER_TEMP/bot-activation.json" > /dev/null; then
+            echo "::error::Bot activation failed (HTTP $status)."
+            exit 1
+          fi

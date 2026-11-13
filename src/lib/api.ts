@@ -1,4 +1,6 @@
 import type { Booking, ClientProfile, Coach, Court, FreeSlot, Order, OrderContact, Product, TrainingSession } from './types'
+import { getTelegram } from './telegram'
+import { deviceKey } from './device'
 
 export type Catalog = {
   courts: Court[]
@@ -8,44 +10,33 @@ export type Catalog = {
   products: Product[]
 }
 
-export type VerifiedUser = { id: number; firstName: string; lastName: string | null }
-export type AppSession = { token: string; expiresIn: number; user: VerifiedUser }
-
 const REQUEST_TIMEOUT = 8000
-let sessionToken: string | null = null
-const sessionRejectedListeners = new Set<() => void>()
 
-/** Сессия существует только в памяти вкладки, никогда не в URL или localStorage. */
-export function setSessionToken(token: string): void {
-  sessionToken = token
+/**
+ * Заголовки авторизации:
+ * — внутри Telegram — подпись initData (это настоящий игрок);
+ * — в обычном браузере — метка устройства, чтобы записи не терялись
+ *   и доезжали до админки бота.
+ */
+function authHeaders(): Record<string, string> {
+  const initData = getTelegram()?.initData
+  if (initData) return { authorization: `tma ${initData}` }
+  return { 'x-dt-device': deviceKey() }
 }
 
-export function clearSessionToken(expected?: string): boolean {
-  if (expected !== undefined && sessionToken !== expected) return false
-  const hadSession = sessionToken !== null
-  sessionToken = null
-  return hadSession
-}
-
-export function onSessionRejected(listener: () => void): () => void {
-  sessionRejectedListeners.add(listener)
-  return () => { sessionRejectedListeners.delete(listener) }
-}
-
-async function request<T>(path: string, init?: RequestInit, useSession = true): Promise<T> {
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT)
-  const usedToken = useSession ? sessionToken : null
-  const headers = new Headers(init?.headers)
-  headers.set('content-type', 'application/json')
-  if (usedToken && !headers.has('authorization')) headers.set('authorization', `tma-session ${usedToken}`)
 
   try {
     const response = await fetch(path, {
       ...init,
       signal: controller.signal,
-      cache: 'no-store',
-      headers,
+      headers: {
+        'content-type': 'application/json',
+        ...authHeaders(),
+        ...init?.headers,
+      },
     })
 
     const payload = (await response.json().catch(() => null)) as
@@ -53,11 +44,6 @@ async function request<T>(path: string, init?: RequestInit, useSession = true): 
       | null
 
     if (!response.ok) {
-      // Не прячем отказ в «пустых» записях и не сбрасываем более новую сессию
-      // из-за запоздавшего ответа предыдущего запроса.
-      if (response.status === 401 && usedToken && clearSessionToken(usedToken)) {
-        sessionRejectedListeners.forEach((listener) => listener())
-      }
       throw new ApiError(payload?.error ?? 'Сервис недоступен', response.status)
     }
     if (!payload) throw new ApiError('Пустой ответ сервиса', 502)
@@ -77,14 +63,9 @@ export class ApiError extends Error {
 }
 
 export const api = {
-  // Сырой initData передаём только при входе; сервер сначала проверяет HMAC.
-  openSession: (initData: string) => request<AppSession>('/api/me', {
-    method: 'POST',
-    headers: { authorization: `tma ${initData}` },
-  }, false),
-  // Каталог не содержит личных данных, подпись ему не нужна.
-  catalog: () => request<Catalog>('/api/catalog', undefined, false),
-  me: () => request<{ user: VerifiedUser; hasBookings: boolean }>('/api/me'),
+  catalog: () => request<Catalog>('/api/catalog'),
+  me: () => request<{ user: { firstName: string }; hasBookings: boolean }>('/api/me'),
+  // Персональные записи доступны только с подписью Telegram.
   bookings: () => request<{ bookings: Booking[]; user?: { firstName: string } }>('/api/bookings?mine=1'),
   createBooking: (draft: Omit<Booking, 'id' | 'createdAt'>) =>
     request<{ id: string }>('/api/bookings', { method: 'POST', body: JSON.stringify(draft) }),

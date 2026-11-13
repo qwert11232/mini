@@ -1,14 +1,12 @@
 import { adminIds, isAdmin } from './_lib/db.js'
 import {
   getWebhookInfo,
-  setChatMenuButton,
-  setMyCommands,
   setWebhook,
   takeLastError,
   webhookSecret,
-  type BotCommand,
 } from './_lib/telegram.js'
 import { appUrl } from './_lib/app-url.js'
+import { configureBotMenu, type MenuStep } from './_lib/menu.js'
 import { verifyInitData } from '../_lib/telegram.js'
 
 /**
@@ -20,30 +18,6 @@ import { verifyInitData } from '../_lib/telegram.js'
  * ?mode=menu обновляет только кнопку и команды, не трогая webhook и его очередь.
  */
 
-const PLAYER_COMMANDS: BotCommand[] = [
-  { command: 'start', description: 'Главное меню' },
-  { command: 'me', description: 'Мои записи' },
-  { command: 'orders', description: 'Мои заказы' },
-  { command: 'schedule', description: 'Расписание занятий' },
-  { command: 'help', description: 'Помощь' },
-]
-
-const ADMIN_EXTRA_COMMANDS: BotCommand[] = [
-  { command: 'today', description: 'Записи на сегодня' },
-  { command: 'tomorrow', description: 'Записи на завтра' },
-  { command: 'orders', description: 'Заказы к выдаче' },
-  { command: 'admin', description: 'Панель администратора' },
-]
-
-const ADMIN_SCOPE_COMMANDS: BotCommand[] = [
-  { command: 'start', description: 'Панель администратора' },
-  { command: 'me', description: 'Мои записи' },
-  { command: 'schedule', description: 'Расписание · панель' },
-  { command: 'help', description: 'Справка панели' },
-  ...ADMIN_EXTRA_COMMANDS,
-]
-
-type Step = { step: string; ok: boolean; detail?: unknown }
 
 async function handler(request: Request): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'POST') {
@@ -51,7 +25,7 @@ async function handler(request: Request): Promise<Response> {
   }
 
   const url = new URL(request.url)
-  const steps: Step[] = []
+  const steps: MenuStep[] = []
 
   try {
     if (!process.env.TELEGRAM_BOT_TOKEN) {
@@ -95,14 +69,9 @@ async function handler(request: Request): Promise<Response> {
       steps.push({ step: 'setWebhook', ok: webhookSet, detail: webhookSet ? webhookUrl : takeLastError() })
     }
 
-    const menuButtonSet = await setChatMenuButton(app, 'Открыть приложение')
-    steps.push({
-      step: 'setChatMenuButton',
-      ok: menuButtonSet,
-      detail: menuButtonSet ? app : takeLastError(),
-    })
-
-    steps.push(...(await configureCommands()))
+    const menuSteps = await configureBotMenu(app)
+    steps.push(...menuSteps)
+    const menuButtonSet = menuSteps.find((step) => step.step === 'setChatMenuButton')?.ok ?? false
 
     if (!menuOnly) {
       const info = await getWebhookInfo()
@@ -143,37 +112,6 @@ async function handler(request: Request): Promise<Response> {
       500,
     )
   }
-}
-
-/** Команды меню — подсказка, фактический доступ всегда проверяется webhook. */
-async function configureCommands(): Promise<Step[]> {
-  const result: Step[] = []
-
-  // Перезаписываем прежний общий список, не передавая Telegram пустой массив.
-  const defaults = await setMyCommands(PLAYER_COMMANDS, { type: 'default' })
-  result.push({
-    step: 'setMyCommands:default',
-    ok: defaults,
-    detail: defaults ? PLAYER_COMMANDS.length : takeLastError(),
-  })
-
-  const players = await setMyCommands(PLAYER_COMMANDS, { type: 'all_private_chats' })
-  result.push({
-    step: 'setMyCommands:players',
-    ok: players,
-    detail: players ? PLAYER_COMMANDS.length : takeLastError(),
-  })
-
-  for (const id of adminIds()) {
-    const chatId = Number(id)
-    const configured = await setMyCommands(ADMIN_SCOPE_COMMANDS, { type: 'chat', chat_id: chatId })
-    result.push({
-      step: 'setMyCommands:admin',
-      ok: configured,
-      detail: configured ? chatId : { chatId, error: takeLastError() },
-    })
-  }
-  return result
 }
 
 type Access = { allowed: boolean; reason: string }

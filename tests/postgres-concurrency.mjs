@@ -30,11 +30,14 @@ try {
   const schema = (await readFile(new URL('../db/schema.sql', import.meta.url), 'utf8'))
     .replace('create extension if not exists "pgcrypto";', '') // gen_random_uuid() встроен в PostgreSQL 13+
   await pool.query(schema)
+  // Боевой модуль указывает public явно; в тесте перенаправляем только его
+  // таблицу в случайную временную схему, не трогая public тестовой базы.
+  const isolated = (text) => text.replaceAll('public.bot_dialog_state', `${schemaName}.bot_dialog_state`)
   const query = async (strings, ...values) => {
     const text = strings.reduce((s, p, i) => s + p + (i < values.length ? `$${i + 1}` : ''), '')
-    return (await pool.query(text, values)).rows
+    return (await pool.query(isolated(text), values)).rows
   }
-  query.query = async (text, values) => (await pool.query(text, values)).rows
+  query.query = async (text, values) => (await pool.query(isolated(text), values)).rows
   globalThis.__raceTestDb = query
   // Neon-клиент ниже подменён локальным пулом: сеть к Neon не используется.
   process.env.DATABASE_URL = rawUrl
@@ -56,6 +59,11 @@ try {
   const { cancelBooking: cancelAdmin } = await import(new URL('../api/bot/_lib/bookings.ts', import.meta.url))
   const { updateSession, deleteSession, deleteSlot } = await import(new URL('../api/bot/_lib/catalog-admin.ts', import.meta.url))
   const { createBooking } = await import(new URL('../api/bookings.ts', import.meta.url))
+  const { applyBotStateSchema } = await import(new URL('../api/bot/_lib/state-schema.ts', import.meta.url))
+  const migrations = await Promise.allSettled(Array.from({ length: 20 }, () => applyBotStateSchema()))
+  assert.ok(migrations.every((result) => result.status === 'fulfilled'), JSON.stringify(migrations))
+  assert.ok((await pool.query('select to_regclass($1) as name', [`${schemaName}.bot_dialog_state`])).rows[0].name)
+  console.log('✓ PostgreSQL: 20 параллельных созданий таблицы состояния бота')
   const secret = createHmac('sha256', 'WebAppData').update(process.env.TELEGRAM_BOT_TOKEN).digest()
   function request(kind, sourceId, id) {
     const params = new URLSearchParams({ auth_date: String(Math.floor(Date.now() / 1000)), user: JSON.stringify({ id, first_name: 'Test' }) })

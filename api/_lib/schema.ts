@@ -1,11 +1,8 @@
 /**
- * Схема и демо-данные Neon. Один источник правды: отсюда их берёт
- * /api/admin/setup (первичная накатка из браузера).
- *
- * SCHEMA идемпотентна. SEED на существующей базе может пересчитать starts_at
- * по day_offset: повторный прогон на рабочей базе требует резервной копии.
- * Отдельную таблицу состояния бота можно применить без SEED через
- * /api/admin/migrate-bot-state.
+ * Общая схема и демо-данные Neon для первичной установки /api/admin/setup.
+ * Повторный SEED на рабочей базе может сдвинуть даты занятий и окон;
+ * его нельзя запускать без резервной копии и отдельного плана.
+ * Отдельная таблица бота определяется в api/bot/_lib/state-schema.ts.
  */
 
 /**
@@ -19,23 +16,6 @@ export const CUSTOMER_SCHEMA = [
   `update users set client_no = nextval('users_client_no_seq') where client_no is null`,
   `alter table orders add column if not exists contact_name text`,
   `alter table orders add column if not exists contact_phone text`,
-]
-
-/**
- * Только новая таблица: не изменяет занятия, окна, брони и заказы.
- * Намеренно не добавлена в db/schema.sql: изменение этого файла запускает
- * GitHub Actions на main. Дубликат для ручного применения —
- * migrations/001_bot_dialog_state.sql; применять только после резервной копии.
- */
-export const BOT_STATE_SCHEMA = [
-  `create table if not exists public.bot_dialog_state (
-     chat_id bigint primary key,
-     pending jsonb,
-     product_draft jsonb,
-     session_draft jsonb,
-     slot_draft jsonb,
-     updated_at timestamptz not null default now()
-   )`,
 ]
 
 export const SCHEMA = [
@@ -149,7 +129,6 @@ export const SCHEMA = [
      payload jsonb not null default '{}',
      created_at timestamptz not null default now()
    )`,
-  ...BOT_STATE_SCHEMA,
 ]
 
 export const SEED = [

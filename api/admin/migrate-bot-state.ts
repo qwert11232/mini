@@ -1,5 +1,5 @@
 import { dbUrl, getDb, json } from '../_lib/db.js'
-import { BOT_STATE_SCHEMA } from '../_lib/schema.js'
+import { applyBotStateSchema, BOT_STATE_SCHEMA } from '../bot/_lib/state-schema.js'
 
 /**
  * GET/POST /api/admin/migrate-bot-state — безопасная миграция для админ-бота.
@@ -33,11 +33,8 @@ async function handler(request: Request): Promise<Response> {
       return json({ ok: false, error: 'Неверный или отсутствующий token' }, 401)
     }
 
+    await applyBotStateSchema()
     const sql = getDb()
-    for (const statement of BOT_STATE_SCHEMA) {
-      await sql.query(statement, [])
-    }
-
     const [row] = (await sql`
       select to_regclass('public.bot_dialog_state') as relation
     `) as unknown as { relation: string | null }[]

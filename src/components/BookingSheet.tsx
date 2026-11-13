@@ -30,7 +30,7 @@ export function BookingSheet({ target, options, onSelect, onClose, onConfirm }: 
     >
       {target ? (
         <div className="stack gap-4">
-          <p className="t-footnote">Запись будет привязана к вашему аккаунту Telegram.</p>
+          <p className="t-footnote">Для записи откройте приложение в Telegram.</p>
           <div className="booking-hero">
             <p className="t-caption" style={{ color: 'var(--green-200)' }}>{target.eyebrow}</p>
             <p className="t-title3" style={{ color: '#fff', marginTop: 6 }}>{target.title}</p>

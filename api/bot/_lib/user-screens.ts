@@ -96,7 +96,6 @@ export function userAboutScreen(adminPreview = false): Screen {
 type ScheduleRow = {
   title: string
   start: string
-  localStart: string | null
   durationMin: number
   price: number
   free: number
@@ -106,12 +105,12 @@ type ScheduleRow = {
 
 export async function userScheduleScreen(offset: number, adminPreview = false): Promise<Screen> {
   const day = Number.isFinite(offset) ? Math.max(0, Math.min(Math.trunc(offset), 29)) : 0
+  // Как и в каталоге приложения: день определяется starts_at, отображается start_time.
   const sql = getDb()
   const rows = (await sql`
     select s.title, s.start_time as start, s.duration_min as "durationMin", s.price,
            greatest(s.seats_total - s.seats_taken, 0)::int as free,
-           c.name as coach, k.name as court,
-           to_char(s.starts_at at time zone 'Europe/Moscow', 'HH24:MI') as "localStart"
+           c.name as coach, k.name as court
     from training_sessions s
     left join coaches c on c.id = s.coach_id
     left join courts k on k.id = s.court_id
@@ -131,7 +130,7 @@ export async function userScheduleScreen(offset: number, adminPreview = false): 
       .filter((item): item is string => Boolean(item))
       .map(escapeHtml)
     return [
-      `${mark} <b>${escapeHtml(row.localStart ?? row.start)}</b> · ${escapeHtml(row.title)}`,
+      `${mark} <b>${escapeHtml(row.start)}</b> · ${escapeHtml(row.title)}`,
       `    ${details.join(' · ')}`,
     ].join('\n')
   })
@@ -220,7 +219,7 @@ export async function userBookingsScreen(
   const sql = getDb()
   const rows = (await sql`
     select b.id, b.kind, b.title, b.price,
-           to_char(b.starts_at at time zone 'Europe/Moscow', 'DD.MM, HH24:MI') as start,
+           to_char(b.starts_at at time zone 'Europe/Moscow', 'DD.MM') || ', ' || b.start_time as start,
            (b.starts_at > now()) as "canCancel"
     from bookings b
     join users u on u.id = b.user_id
@@ -273,7 +272,7 @@ export async function userCancelScreen(
   }
   const sql = getDb()
   const rows = (await sql`
-    select b.title, to_char(b.starts_at at time zone 'Europe/Moscow', 'DD.MM, HH24:MI') as start
+    select b.title, to_char(b.starts_at at time zone 'Europe/Moscow', 'DD.MM') || ', ' || b.start_time as start
     from bookings b
     join users u on u.id = b.user_id
     where b.id = ${bookingId}

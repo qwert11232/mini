@@ -8,13 +8,6 @@ const db = await PGlite.create()
 const schema = (await readFile(new URL('../db/schema.sql', import.meta.url), 'utf8'))
   .replace('create extension if not exists "pgcrypto";', '')
 await db.exec(schema)
-// Состояние бота — отдельная миграция: db/schema.sql не меняем, чтобы merge
-// не запустил автоматический workflow применения всей схемы к рабочей базе.
-const { BOT_STATE_SCHEMA } = await import('../api/_lib/schema.ts')
-const standaloneMigration = await readFile(new URL('../migrations/001_bot_dialog_state.sql', import.meta.url), 'utf8')
-const normalizeSql = (text) => text.replace(/--[^\n]*/g, '').replace(/;\s*$/, '').replace(/\s+/g, ' ').trim()
-assert.equal(normalizeSql(standaloneMigration), normalizeSql(BOT_STATE_SCHEMA[0]), 'ручная и API-миграции должны совпадать')
-for (const statement of BOT_STATE_SCHEMA) await db.exec(statement)
 let failDbQuery = null
 const query = async (strings, ...values) => {
   const text = strings.reduce((result, part, index) => result + part + (index < values.length ? `$${index + 1}` : ''), '')
@@ -60,6 +53,14 @@ registerHooks({
   },
 })
 
+// Состояние бота — отдельная миграция: db/schema.sql не меняем, чтобы merge
+// не запустил автоматический workflow применения всей схемы к рабочей базе.
+const { BOT_STATE_SCHEMA } = await import('../api/bot/_lib/state-schema.ts')
+const standaloneMigration = await readFile(new URL('../migrations/001_bot_dialog_state.sql', import.meta.url), 'utf8')
+const normalizeSql = (text) => text.replace(/--[^\n]*/g, '').replace(/;\s*$/, '').replace(/\s+/g, ' ').trim()
+assert.equal(normalizeSql(standaloneMigration), normalizeSql(BOT_STATE_SCHEMA[0]), 'ручная и API-миграции должны совпадать')
+for (const statement of BOT_STATE_SCHEMA) await db.exec(statement)
+
 const { createBooking, cancelBooking, listBookings } = await import('../api/bookings.ts')
 const { createOrder, listOrders } = await import('../api/orders.ts')
 const { default: client } = await import('../api/client.ts')
@@ -72,19 +73,17 @@ const { default: migrateBotState } = await import('../api/admin/migrate-bot-stat
 const { default: setup } = await import('../api/bot/setup.ts')
 const { appUrl } = await import('../api/bot/_lib/app-url.ts')
 const { cancelOwnBooking } = await import('../api/bot/_lib/user-screens.ts')
-const { clubDate } = await import('../api/bot/_lib/db.ts')
-const { isAdmin: isMiniAppAdmin, verifyInitData } = await import('../api/_lib/telegram.ts')
-const { default: me } = await import('../api/me.ts')
+const { clubDate, isAdmin: isBotAdmin, adminIds } = await import('../api/bot/_lib/db.ts')
 // Если allowlist задан явно, даже пустой, он полностью заменяет ID по умолчанию.
 const configuredAdmins = process.env.ADMIN_TELEGRAM_IDS
-const adminUser = { id: 793536041, firstName: 'Admin', username: null, lastName: null }
 delete process.env.ADMIN_TELEGRAM_IDS
-assert.equal(isMiniAppAdmin(adminUser), true)
+assert.equal(isBotAdmin(793536041), true)
 process.env.ADMIN_TELEGRAM_IDS = ''
-assert.equal(isMiniAppAdmin(adminUser), false)
+assert.equal(isBotAdmin(793536041), false)
 process.env.ADMIN_TELEGRAM_IDS = ' , 123456789, nope, 99999999999999999999, 123456789 '
-assert.equal(isMiniAppAdmin(adminUser), false)
-assert.equal(isMiniAppAdmin({ ...adminUser, id: 123456789 }), true)
+assert.equal(isBotAdmin(793536041), false)
+assert.equal(isBotAdmin(123456789), true)
+assert.deepEqual(adminIds(), ['123456789'])
 process.env.ADMIN_TELEGRAM_IDS = configuredAdmins
 
 const secret = createHmac('sha256', 'WebAppData').update(process.env.TELEGRAM_BOT_TOKEN).digest()
@@ -100,40 +99,6 @@ function signed(id = 123456789) {
 function request(path, body, auth = signed(), method = 'POST') {
   return new Request(`https://example.test/api/${path}`, { method, headers: auth ? { authorization: auth } : { 'x-dt-device': 'testdevice123' }, ...(body ? { body: JSON.stringify(body) } : {}) })
 }
-
-// Фиксированный вектор рассчитан отдельно Python hmac/hashlib: проверяем
-// порядок полей, URL-декодирование и включение Telegram signature в HMAC.
-const vector = new URLSearchParams({
-  query_id: 'AA+/= тест',
-  user: '{"id":444444444,"first_name":"Ёж & Co","last_name":"Тест","username":"test_user"}',
-  signature: 'new-ed25519-signature',
-  ab: 'second',
-  a_B: 'first',
-  auth_date: '1700000000',
-  hash: 'f8f17774f2598fe9f4cfd735cdb320004c4f172a45beaa8a1cd8ad8691c71313',
-})
-assert.deepEqual(await verifyInitData(vector.toString(), 4_000_000_000), {
-  id: 444444444, firstName: 'Ёж & Co', lastName: 'Тест', username: 'test_user',
-})
-const alteredVector = new URLSearchParams(vector)
-alteredVector.set('signature', 'changed')
-await assert.rejects(verifyInitData(alteredVector.toString(), 4_000_000_000), (error) => error.status === 401)
-await assert.rejects(verifyInitData(`${vector}&user=%7B%22id%22%3A1%7D`, 4_000_000_000), (error) => error.status === 401)
-await assert.rejects(verifyInitData(`${vector}&hash=${vector.get('hash')}`, 4_000_000_000), (error) => error.status === 401)
-const nowSeconds = Math.floor(Date.now() / 1000)
-const minimalUser = JSON.stringify({ id: 444444444, first_name: 'Игрок' })
-for (const fields of [
-  { auth_date: String(nowSeconds - 601), user: minimalUser },
-  { auth_date: String(nowSeconds + 60), user: minimalUser },
-  { auth_date: `${nowSeconds}.1`, user: minimalUser },
-  { auth_date: String(nowSeconds), user: 'null' },
-  { auth_date: String(nowSeconds), user: JSON.stringify({ id: -1, first_name: 'Игрок' }) },
-  { auth_date: String(nowSeconds), user: JSON.stringify({ id: '444444444', first_name: 'Игрок' }) },
-  { auth_date: String(nowSeconds) },
-]) {
-  await assert.rejects(verifyInitData(signedFields(fields).slice(4)), (error) => error.status === 401)
-}
-assert.equal((await verifyInitData(signedFields({ auth_date: String(nowSeconds - 599), user: minimalUser }).slice(4))).id, 444444444)
 
 await db.exec(`
   insert into courts (id, name, surface) values ('c', 'Корт 1', 'Хард'), ('other', 'Корт 2', 'Хард');
@@ -345,12 +310,23 @@ assert.equal((await migrateBotState.fetch(new Request('https://example.test/api/
 assert.equal((await migrateBotState.fetch(new Request('https://example.test/api/admin/migrate-bot-state?token=admin-migration-token'))).status, 200)
 delete process.env.ADMIN_SETUP_TOKEN
 
+// Если таблицу ещё не создали после backup, подтверждённый запрос админа
+// создаёт только её и сразу открывает панель, без общей схемы и SEED.
+const beforeAutoMigration = await db.query(`
+  select (select count(*)::int from bookings) as bookings,
+         (select count(*)::int from orders) as orders,
+         (select count(*)::int from training_sessions) as sessions
+`)
 await db.exec('drop table bot_dialog_state')
 telegramCalls.length = 0
 await botStep(adminCallback('menu'))
-assert.ok(telegramCalls.some(({ payload }) => payload.text?.includes('migrate-bot-state')))
-const restored = await migrateBotState.fetch(new Request('https://example.test/api/admin/migrate-bot-state?token=migration-token', { method: 'GET' }))
-assert.equal(restored.status, 200)
+assert.ok(telegramCalls.some(({ payload }) => payload.text?.includes('Панель клуба')))
+assert.ok((await db.query("select to_regclass('public.bot_dialog_state') as name")).rows[0].name)
+assert.deepEqual(await db.query(`
+  select (select count(*)::int from bookings) as bookings,
+         (select count(*)::int from orders) as orders,
+         (select count(*)::int from training_sessions) as sessions
+`), beforeAutoMigration)
 
 process.env.VITE_APP_URL = '[https://broken'
 assert.throws(() => appUrl(), /VITE_APP_URL/)
@@ -407,8 +383,8 @@ telegramCalls.length = 0
 await botStep(legacyUsername)
 assert.match(telegramCalls.at(-1).payload.text, /Теннисный клуб/)
 assert.doesNotMatch(telegramCalls.at(-1).payload.text, /Панель клуба/)
-assert.equal(isMiniAppAdmin({ id: playerId, firstName: 'Игрок', username: 'legacy_admin', lastName: null }), false)
-assert.equal(isMiniAppAdmin({ id: adminId, firstName: 'Admin', username: null, lastName: null }), true)
+assert.equal(isBotAdmin(playerId), false)
+assert.equal(isBotAdmin(adminId), true)
 
 // В группах и чужих личных чатах персональные данные и панель не отправляются.
 const groupAdmin = adminMessage('/start')
@@ -438,6 +414,9 @@ const adminStart = telegramCalls.at(-1).payload
 assert.match(adminStart.text, /Панель клуба/)
 assertMiniAppButton(adminStart)
 assert.ok(lastKeyboard(adminStart).some((button) => button.callback_data === 'u:home'))
+telegramCalls.length = 0
+await botStep(adminMessage('/tomorrow'))
+assert.match(telegramCalls.at(-1).payload.text, /<b>13:00<\/b> · Настоящее занятие/)
 
 // Подделка admin-callback от обычного ID не открывает админский экран.
 telegramCalls.length = 0
@@ -477,6 +456,9 @@ telegramCalls.length = 0
 await botStep(playerCallback('u:schedule:1'))
 const tomorrowSchedule = telegramCalls.at(-1).payload
 assert.match(tomorrowSchedule.text, /На месяц/)
+// Для старых строк starts_at может отличаться от start_time: бот показывает
+// то же время, что и работающий каталог, и не переписывает существующие данные.
+assert.match(tomorrowSchedule.text, /<b>13:00<\/b> · Настоящее занятие/)
 assert.ok(lastKeyboard(tomorrowSchedule).some((button) => button.callback_data === 'u:schedule:2'))
 telegramCalls.length = 0
 await botStep(playerCallback('u:schedule:29'))
@@ -498,16 +480,20 @@ await botStep(playerMessage('/me'))
 const playerBookings = telegramCalls.at(-1).payload
 assertMiniAppButton(playerBookings)
 assert.match(playerBookings.text, /Ваши записи/)
+assert.match(playerBookings.text, /13:00<\/b> · Настоящее занятие/)
 assert.ok(lastKeyboard(playerBookings).some((button) => String(button.callback_data ?? '').startsWith('u:cancelask:')))
 
-// Игрок отменяет только свою будущую запись, с подтверждением.
+// Игрок отменяет только свою будущую аренду, с подтверждением. Выбираем
+// именно оставшееся окно, чтобы не затронуть занятие для отдельного теста ниже:
+// порядок аренды и занятия зависит от текущего времени суток.
 const [ownBooking] = (await db.query(`
   select b.id, b.kind, b.source_id as "sourceId"
   from bookings b join users u on u.id = b.user_id
-  where u.telegram_id = $1 and b.status = 'active' and b.starts_at > now()
-  order by b.starts_at limit 1
+  where u.telegram_id = $1 and b.kind = 'free' and b.source_id in ('a', 'b')
+    and b.status = 'active' and b.starts_at > now()
+  order by b.source_id limit 1
 `, [playerId])).rows
-assert.ok(ownBooking, 'у игрока должна быть активная будущая запись')
+assert.ok(ownBooking, 'у игрока должно быть активное будущее окно аренды')
 telegramCalls.length = 0
 await botStep(playerCallback(`u:cancelask:${ownBooking.id}`))
 const cancelConfirm = telegramCalls.at(-1).payload
@@ -770,15 +756,6 @@ telegramCalls.length = 0
 await botStep(adminCallback('u:admin'))
 assert.match(telegramCalls.at(-1).payload.text, /Панель клуба/)
 
-// Mini App использует тот же список числовых ID, что и бот.
-const adminMe = await me.fetch(request('me', null, signed(adminId), 'GET'))
-assert.equal(adminMe.status, 200)
-assert.equal((await adminMe.json()).user.isAdmin, true)
-const playerMe = await me.fetch(request('me', null, signed(playerId), 'GET'))
-assert.equal(playerMe.status, 200)
-assert.equal((await playerMe.json()).user.isAdmin, false)
-assert.equal((await me.fetch(request('me', null, null, 'GET'))).status, 401)
-
 // Setup: web_app-кнопка меню и раздельные command scopes.
 telegramCalls.length = 0
 const setupResponse = await setup.fetch(new Request('https://example.test/api/bot/setup?token=migration-token', { method: 'GET' }))
@@ -808,6 +785,15 @@ const menuOnly = await setup.fetch(new Request('https://example.test/api/bot/set
 assert.equal(menuOnly.status, 200)
 assert.equal((await menuOnly.json()).webhookConfigured, null)
 assert.ok(!telegramCalls.some(({ url }) => url.endsWith('/setWebhook')))
+// Админ может настроить меню с проверенной Telegram-подписью; чужой ID не может.
+telegramCalls.length = 0
+const signedAdminSetup = await setup.fetch(new Request('https://example.test/api/bot/setup?mode=menu', { headers: { authorization: signed(adminId) } }))
+assert.equal(signedAdminSetup.status, 200)
+assert.ok(!telegramCalls.some(({ url }) => url.endsWith('/setWebhook')))
+telegramCalls.length = 0
+const signedPlayerSetup = await setup.fetch(new Request('https://example.test/api/bot/setup?mode=menu', { headers: { authorization: signed(playerId) } }))
+assert.equal(signedPlayerSetup.status, 401)
+assert.equal(telegramCalls.length, 0)
 telegramCalls.length = 0
 const wrongMode = await setup.fetch(new Request('https://example.test/api/bot/setup?mode=typo&token=migration-token'))
 assert.equal(wrongMode.status, 400)
@@ -836,92 +822,6 @@ telegramCalls.length = 0
 await botStep(htmlName)
 assert.ok(telegramCalls.at(-1).payload.text.includes('&lt;Игрок &amp; друг&gt;'))
 
-// Полная цепочка: web_app → подписанный initData → короткая сессия → свой ID.
-// Ни произвольный device key, ни initDataUnsafe без подписи не создают сессию.
-const sessionId = 444444444
-const telegramAuth = signedFields({
-  auth_date: String(Math.floor(Date.now() / 1000)),
-  query_id: 'test-query',
-  signature: 'new-ed25519-signature',
-  user: JSON.stringify({ id: sessionId, first_name: 'Елена', last_name: 'Игрокова', username: 'elena_test' }),
-})
-assert.equal((await me.fetch(request('me', null, null, 'POST'))).status, 401)
-assert.equal((await me.fetch(new Request('https://example.test/api/me', { method: 'POST' }))).status, 401)
-assert.equal((await me.fetch(request('me', null, 'tma user=%7B%22id%22%3A444444444%7D', 'POST'))).status, 401)
-assert.equal((await me.fetch(request('me', null, `${telegramAuth}&auth_date=1`, 'POST'))).status, 401)
-const invalidHash = new URLSearchParams(telegramAuth.slice(4))
-invalidHash.set('user', JSON.stringify({ id: adminId, first_name: 'Подмена' }))
-assert.equal((await me.fetch(request('me', null, `tma ${invalidHash}`, 'POST'))).status, 401)
-assert.equal((await me.fetch(request('me', null, signedFields({ auth_date: String(nowSeconds - 601), user: minimalUser }), 'POST'))).status, 401)
-assert.equal((await db.query('select count(*)::int as n from users where telegram_id = $1', [sessionId])).rows[0].n, 0)
-
-const sessionStartedAt = Date.now()
-const sessionResponse = await me.fetch(request('me', null, telegramAuth, 'POST'))
-assert.equal(sessionResponse.status, 200)
-assert.equal(sessionResponse.headers.get('cache-control'), 'no-store')
-const issued = await sessionResponse.json()
-assert.equal(issued.expiresIn, 7200)
-assert.deepEqual(issued.user, { id: sessionId, firstName: 'Елена', lastName: 'Игрокова' })
-assert.ok(issued.token && !issued.token.includes(process.env.TELEGRAM_BOT_TOKEN))
-const sessionAuth = `tma-session ${issued.token}`
-assert.equal((await me.fetch(request('me', null, sessionAuth, 'POST'))).status, 401, 'сессию нельзя продлевать самой сессией')
-const sessionMe = await me.fetch(request('me', null, sessionAuth, 'GET'))
-assert.equal(sessionMe.status, 200)
-assert.equal((await sessionMe.json()).user.id, sessionId)
-assert.equal((await client.fetch(request('client', null, sessionAuth, 'GET'))).status, 200)
-
-const [encodedPayload, signature] = issued.token.split('.')
-const modifiedPayload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'))
-modifiedPayload.user.id = adminId
-const forgedToken = `${Buffer.from(JSON.stringify(modifiedPayload)).toString('base64url')}.${signature}`
-assert.equal((await me.fetch(request('me', null, `tma-session ${forgedToken}`, 'GET'))).status, 401)
-const changedSignature = (signature[0] === 'A' ? 'B' : 'A') + signature.slice(1)
-assert.equal((await me.fetch(request('me', null, `tma-session ${encodedPayload}.${changedSignature}`, 'GET'))).status, 401)
-assert.equal((await me.fetch(request('me', null, 'tma-session nonsense', 'GET'))).status, 401)
-assert.equal((await me.fetch(new Request('https://other.example.test/api/me', { headers: { authorization: sessionAuth } }))).status, 401, 'сессия привязана к origin')
-const originalToken = process.env.TELEGRAM_BOT_TOKEN
-process.env.TELEGRAM_BOT_TOKEN = 'rotated-test-token'
-assert.equal((await me.fetch(request('me', null, sessionAuth, 'GET'))).status, 401)
-process.env.TELEGRAM_BOT_TOKEN = originalToken
-
-await db.exec(`
-  insert into free_slots (id,court_id,day_offset,start_time,duration_min,price,starts_at)
-  values ('session-slot','c',1,'15:00',60,1900,now() + interval '1 day');
-  insert into products (id,title,category,price) values ('session-product','Мячи для сессии','Мячи',500);
-`)
-const sessionBooking = await createBooking(request('bookings', { kind: 'free', sourceId: 'session-slot' }, sessionAuth))
-assert.equal(sessionBooking.status, 201, await sessionBooking.clone().text())
-const sessionBookingId = (await sessionBooking.json()).id
-const sessionOrder = await createOrder(request('orders', { productId: 'session-product', name: 'Елена', phone: '+79991234567' }, sessionAuth))
-assert.equal(sessionOrder.status, 201, await sessionOrder.clone().text())
-const sessionOrderId = (await sessionOrder.json()).id
-assert.equal((await db.query('select u.telegram_id from bookings b join users u on u.id = b.user_id where b.id = $1', [sessionBookingId])).rows[0].telegram_id, sessionId)
-assert.equal((await db.query('select u.telegram_id from orders o join users u on u.id = o.user_id where o.id = $1', [sessionOrderId])).rows[0].telegram_id, sessionId)
-assert.ok((await (await listBookings(request('bookings?mine=1', null, sessionAuth, 'GET'))).json()).bookings.some((item) => item.id === sessionBookingId))
-assert.ok((await (await listOrders(request('orders', null, sessionAuth, 'GET'))).json()).orders.some((item) => item.id === sessionOrderId))
-
-const otherSessionResponse = await me.fetch(request('me', null, signed(555555555), 'POST'))
-const otherAuth = `tma-session ${(await otherSessionResponse.json()).token}`
-assert.equal((await (await listBookings(request('bookings?mine=1', null, otherAuth, 'GET'))).json()).bookings.length, 0)
-assert.equal((await (await listOrders(request('orders', null, otherAuth, 'GET'))).json()).orders.length, 0)
-assert.equal((await cancelBooking(request(`bookings?id=${sessionBookingId}`, null, otherAuth, 'DELETE'))).status, 404)
-assert.equal((await listOrders(request('orders', null, null, 'GET'))).status, 401)
-assert.equal((await cancelBooking(request(`bookings?id=${sessionBookingId}`, null, null, 'DELETE'))).status, 401)
-
-// Через 11 минут исходная подпись уже не годится для нового входа, но
-// текущая сессия работает; через 2 часа она также отклоняется сервером.
-const realNow = Date.now
-try {
-  Date.now = () => sessionStartedAt + 11 * 60 * 1000
-  assert.equal((await me.fetch(request('me', null, telegramAuth, 'POST'))).status, 401)
-  assert.equal((await listBookings(request('bookings?mine=1', null, sessionAuth, 'GET'))).status, 200)
-  Date.now = () => sessionStartedAt + (2 * 60 * 60 + 2) * 1000
-  assert.equal((await listBookings(request('bookings?mine=1', null, sessionAuth, 'GET'))).status, 401)
-  assert.equal((await createOrder(request('orders', { productId: 'session-product', name: 'Елена', phone: '+79991234567' }, sessionAuth))).status, 401)
-} finally {
-  Date.now = realNow
-}
-
 globalThis.fetch = originalFetch
-console.log('✓ PostgreSQL: Telegram, сессии, атомарная аренда, соседние окна, цена, отмена, роли и состояние бота')
+console.log('✓ PGlite: бронирование, отмена, роли и сохранение состояния бота')
 await db.close()

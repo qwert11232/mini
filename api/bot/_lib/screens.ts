@@ -99,7 +99,7 @@ export async function dayScreen(offset: number): Promise<Screen> {
   const sql = getDb()
   const rows = (await sql`
     select b.id, b.kind, b.title, b.price, b.source_id as "sourceId",
-           to_char(b.starts_at at time zone 'Europe/Moscow', 'HH24:MI') as start,
+           b.start_time as start,
            u.first_name as "firstName", u.username, u.client_no as "clientNo", u.phone
     from bookings b
     left join users u on u.id = b.user_id

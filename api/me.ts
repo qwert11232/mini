@@ -1,26 +1,17 @@
 import { HttpError, failure, getDb, json } from './_lib/db.js'
-import { createSession, isAdmin, resolveUser, verifyInitData } from './_lib/telegram.js'
+import { isAdmin, verifyInitData } from './_lib/telegram.js'
 
 /**
- * POST /api/me — обмен свежей подписи Telegram на короткую сессию в памяти.
- * GET /api/me — проверенный профиль (принимает и прежний заголовок tma).
+ * GET /api/me — проверка подписи Telegram при открытии мини-аппа.
+ * Регистрирует/обновляет пользователя и отдаёт его профиль.
+ * Используется как health-check: если 200 — связка Vercel + Neon + бот жива.
  */
 async function handler(request: Request): Promise<Response> {
   try {
-    if (request.method === 'POST') {
-      const auth = request.headers.get('authorization')
-      if (!auth?.startsWith('tma ')) throw new HttpError(401, 'Откройте приложение в Telegram')
-      const user = await verifyInitData(auth.slice(4))
-      const session = await createSession(user, new URL(request.url).origin)
-      return json({
-        ...session,
-        user: { id: user.id, firstName: user.firstName, lastName: user.lastName },
-      })
-    }
+    const auth = request.headers.get('authorization')
+    if (!auth?.startsWith('tma ')) throw new HttpError(401, 'Требуется вход через Telegram')
 
-    if (request.method !== 'GET') return json({ error: 'Метод не поддерживается' }, 405)
-    const user = await resolveUser(request)
-    if (!user) throw new HttpError(401, 'Требуется вход через Telegram')
+    const user = await verifyInitData(auth.slice(4))
     const sql = getDb()
 
     await sql`
@@ -55,5 +46,8 @@ async function handler(request: Request): Promise<Response> {
   }
 }
 
-/** Vercel (Node runtime) использует Web-сигнатуру через объект с методом fetch. */
+/**
+ * Vercel (Node runtime) понимает Web-сигнатуру только через объект с методом `fetch`.
+ * «Голый» default-экспорт вызывается как handler(req, res) — Response терялся (500/504).
+ */
 export default { fetch: handler }

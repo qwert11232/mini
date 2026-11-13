@@ -1,4 +1,5 @@
 import { getDb } from './db.js'
+import { applyBotStateSchema } from './state-schema.js'
 import type { ProductDraft, SessionBuildDraft } from './screens.js'
 
 /**
@@ -7,8 +8,9 @@ import type { ProductDraft, SessionBuildDraft } from './screens.js'
  * когда следующий апдейт попадал на другой инстанс. Теперь состояние лежит
  * в отдельной таблице и загружается/сохраняется на каждый апдейт.
  *
- * Миграция применяется отдельно: /api/admin/migrate-bot-state?token=...
- * Функции ниже не создают таблицу и не трогают SCHEMA/SEED рабочей базы.
+ * Таблица создаётся отдельной миграцией после резервной копии; если она ещё
+ * отсутствует, первый подтверждённый запрос администратора создаёт только её.
+ * Общая SCHEMA и SEED рабочей базы здесь не запускаются.
  */
 
 export type Pending =
@@ -144,7 +146,7 @@ export function stateMaps(state: DialogState): DialogMaps {
 
 export async function loadDialogState(chatId: number): Promise<DialogState> {
   const sql = getDb()
-  try {
+  const read = async (): Promise<DialogState> => {
     const rows = (await sql`
       select pending,
              product_draft as "productDraft",
@@ -160,8 +162,18 @@ export async function loadDialogState(chatId: number): Promise<DialogState> {
       sessionDraft: asObject<SessionBuildDraft>(row?.sessionDraft),
       slotDraft: asObject<SlotDraft>(row?.slotDraft),
     }
+  }
+  try {
+    return await read()
   } catch (error) {
-    throw migrationHint(error)
+    const reason = error instanceof Error ? error.message : String(error)
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : null
+    if (code !== '42P01' || !/bot_dialog_state/i.test(reason)) throw migrationHint(error)
+    // Только проверенный webhook администратора доходит до этого места.
+    // Автосоздание не обращается к общей схеме и не запускает SEED.
+    await applyBotStateSchema()
+    console.info('[bot] создана таблица состояния диалогов')
+    return read()
   }
 }
 
