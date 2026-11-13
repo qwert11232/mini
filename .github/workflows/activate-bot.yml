@@ -23,7 +23,8 @@ permissions:
   id-token: write
 
 concurrency:
-  group: telegram-bot-production
+  # Проверка PR не должна прерывать активацию production после merge.
+  group: telegram-bot-${{ github.event.pull_request.number || 'production' }}
   cancel-in-progress: true
 
 jobs:
