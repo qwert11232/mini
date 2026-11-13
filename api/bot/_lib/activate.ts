@@ -1,17 +1,17 @@
-import { json } from '../_lib/db.js'
-import { verifyActivationToken } from './_lib/activation-auth.js'
-import { appUrl } from './_lib/app-url.js'
-import { adminIds } from './_lib/db.js'
-import { configureBotMenu } from './_lib/menu.js'
-import { applyBotStateSchema } from './_lib/state-schema.js'
-import { getWebhookInfo, webhookSecret } from './_lib/telegram.js'
+import { json } from '../../_lib/db.js'
+import { verifyActivationToken } from './activation-auth.js'
+import { appUrl } from './app-url.js'
+import { adminIds } from './db.js'
+import { configureBotMenu } from './menu.js'
+import { applyBotStateSchema } from './state-schema.js'
+import { getWebhookInfo, webhookSecret } from './telegram.js'
 
 /**
  * Активация только после production-деплоя, без секретов в GitHub Actions.
  * Подписанный GitHub OIDC-токен привязан к репозиторию, workflow, main и SHA
  * задеплоенного коммита. Никаких произвольных команд или SQL маршрут не принимает.
  */
-async function handler(request: Request): Promise<Response> {
+export async function activateBot(request: Request): Promise<Response> {
   if (request.method !== 'POST') return json({ ok: false }, 405)
   if (process.env.VERCEL_ENV !== 'production') return json({ ok: false }, 404)
 
@@ -49,5 +49,3 @@ async function handler(request: Request): Promise<Response> {
     return json({ ok: false, error: 'Не удалось подготовить бота' }, 500)
   }
 }
-
-export default { fetch: handler }

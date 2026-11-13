@@ -1,4 +1,5 @@
 import { adminIds, isAdmin } from './_lib/db.js'
+import { activateBot } from './_lib/activate.js'
 import {
   getWebhookInfo,
   setWebhook,
@@ -14,17 +15,20 @@ import { verifyInitData } from '../_lib/telegram.js'
  *
  *   https://<домен>/api/bot/setup?token=<SETUP_TOKEN>
  *
+ * POST ?mode=activate — отдельная production-активация с GitHub OIDC.
  * По умолчанию ставит защищённый webhook и обновляет меню Telegram. Режим
  * ?mode=menu обновляет только кнопку и команды, не трогая webhook и его очередь.
  */
 
 
 async function handler(request: Request): Promise<Response> {
+  const url = new URL(request.url)
+  // Этот маршрут имеет собственную OIDC-авторизацию и не принимает SETUP_TOKEN.
+  if (url.searchParams.get('mode') === 'activate') return activateBot(request)
   if (request.method !== 'GET' && request.method !== 'POST') {
     return json({ error: 'Метод не поддерживается' }, 405)
   }
 
-  const url = new URL(request.url)
   const steps: MenuStep[] = []
 
   try {

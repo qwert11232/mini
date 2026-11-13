@@ -63,7 +63,8 @@ process.env.VITE_APP_URL = 'https://mini-seven-xi.vercel.app'
 process.env.VERCEL_GIT_COMMIT_SHA = sha
 process.env.VERCEL_ENV = 'production'
 
-const { default: activation } = await import('../api/bot/activate.ts')
+const { default: activation } = await import('../api/bot/setup.ts')
+const activationUrl = 'https://mini-seven-xi.vercel.app/api/bot/setup?mode=activate'
 const now = Math.floor(Date.now() / 1000)
 async function sign(overrides = {}) {
   return new SignJWT({
@@ -83,7 +84,7 @@ async function sign(overrides = {}) {
   }).setProtectedHeader({ alg: 'RS256', kid: 'test-key' }).sign(privateKey)
 }
 function request(token, method = 'POST') {
-  return new Request(audience, { method, headers: token ? { authorization: `Bearer ${token}` } : {} })
+  return new Request(activationUrl, { method, headers: token ? { authorization: `Bearer ${token}` } : {} })
 }
 async function table() {
   return (await db.query("select to_regclass('public.bot_dialog_state') as name")).rows[0].name
@@ -97,6 +98,9 @@ try {
   process.env.VERCEL_ENV = 'production'
   assert.equal((await activation.fetch(request(null))).status, 401)
   assert.equal((await activation.fetch(request('not-a-jwt'))).status, 401)
+  process.env.SETUP_TOKEN = 'test-setup-secret'
+  assert.equal((await activation.fetch(new Request(`${activationUrl}&token=test-setup-secret`, { method: 'POST' }))).status, 401)
+  assert.equal((await activation.fetch(new Request(`${activationUrl}&token=test-setup-secret`, { method: 'GET' }))).status, 405)
 
   for (const [field, value] of [
     ['iss', 'https://example.test'],

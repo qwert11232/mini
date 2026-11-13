@@ -4,7 +4,7 @@
   "description": "ДТ — Telegram Mini App теннисного клуба: расписание, свободная игра, магазин, о клубе",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
-    "build": "tsc --noEmit && tsc -p tsconfig.api.json --noEmit && vite build",
+    "build": "node tests/function-budget.mjs && tsc --noEmit && tsc -p tsconfig.api.json --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json --noEmit",
     "smoke": "node smoke.mjs",
